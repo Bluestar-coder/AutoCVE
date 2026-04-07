@@ -1,0 +1,303 @@
+from __future__ import annotations
+
+from datetime import datetime, timezone
+from types import SimpleNamespace
+
+import pytest
+from fastapi import FastAPI
+from httpx import ASGITransport, AsyncClient
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+from app.api import deps
+from app.api.v1.endpoints import audit_sessions as audit_sessions_endpoint
+from app.api.v1.endpoints.audit_sessions import router as audit_sessions_router
+from app.db.base import Base
+from app.models.audit_session import AuditHandoff, AuditMemory, AuditSession, AuditSessionMessage, AuditSkill, AuditSkillInvocation, AuditToolCall
+
+
+def build_test_app() -> FastAPI:
+    app = FastAPI()
+    app.include_router(audit_sessions_router, prefix="/api/v1/audit-sessions")
+    return app
+
+
+@pytest.mark.asyncio
+async def test_get_audit_session_detail_messages_tool_calls_skills_and_memories():
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+    async with session_factory() as db:
+        session = AuditSession(
+            project_id="project-1",
+            task_id="task-1",
+            runtime_stack="runtime",
+            state="pending",
+            system_prompt="prompt",
+            recon_payload={"repo": "demo"},
+        )
+        db.add(session)
+        await db.flush()
+        db.add(
+            AuditSessionMessage(
+                session_id=session.id,
+                sequence=1,
+                role="user",
+                content="inspect the repo",
+                message_metadata={},
+                payload={},
+            )
+        )
+        db.add(
+            AuditToolCall(
+                session_id=session.id,
+                turn_id="turn-1",
+                sequence=1,
+                tool_use_id="tool-1",
+                tool_name="echo",
+                status="completed",
+                is_concurrency_safe=True,
+                input_payload={"text": "demo"},
+                output_payload={"echo": "demo"},
+                duration_ms=7,
+                started_at=datetime.now(timezone.utc),
+                completed_at=datetime.now(timezone.utc),
+            )
+        )
+        db.add(
+            AuditSkill(
+                session_id=session.id,
+                skill_ref="code-audit-finding",
+                name="Code Audit Finding",
+                description="primary skill",
+                source_type="bundled",
+                enabled=True,
+                matched=True,
+                skill_metadata={"slug": "code-audit-finding"},
+            )
+        )
+        db.add(
+            AuditSkillInvocation(
+                session_id=session.id,
+                turn_id="turn-1",
+                sequence=1,
+                skill_ref="code-audit-finding",
+                status="completed",
+                input_payload={"action": "body"},
+                output_payload={"content": "body"},
+            )
+        )
+        db.add(
+            AuditMemory(
+                session_id=session.id,
+                sequence=1,
+                memory_kind="instruction",
+                title="Rule set: baseline",
+                source_type="audit_rule_set",
+                source_ref="ruleset-1",
+                content="Always verify authz.",
+                metadata_json={"rule_count": 1},
+            )
+        )
+        await db.commit()
+        session_id = session.id
+
+    app = build_test_app()
+
+    async def override_get_db():
+        async with session_factory() as db:
+            yield db
+
+    async def override_get_current_user():
+        return SimpleNamespace(id="user-1", is_active=True)
+
+    app.dependency_overrides[deps.get_db] = override_get_db
+    app.dependency_overrides[deps.get_current_user] = override_get_current_user
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://testserver") as client:
+        detail = await client.get(f"/api/v1/audit-sessions/{session_id}")
+        messages = await client.get(f"/api/v1/audit-sessions/{session_id}/messages")
+        tool_calls = await client.get(f"/api/v1/audit-sessions/{session_id}/tool-calls")
+        skills = await client.get(f"/api/v1/audit-sessions/{session_id}/skills")
+        skill_invocations = await client.get(f"/api/v1/audit-sessions/{session_id}/skill-invocations")
+        memories = await client.get(f"/api/v1/audit-sessions/{session_id}/memories")
+
+    await engine.dispose()
+
+    assert detail.status_code == 200
+    assert detail.json()["id"] == session_id
+    assert detail.json()["runtime_stack"] == "runtime"
+    assert len(messages.json()) == 1
+    assert len(tool_calls.json()) == 1
+    assert tool_calls.json()[0]["tool_name"] == "echo"
+    assert len(skills.json()) == 1
+    assert skills.json()[0]["skill_ref"] == "code-audit-finding"
+    assert len(skill_invocations.json()) == 1
+    assert skill_invocations.json()[0]["skill_ref"] == "code-audit-finding"
+    assert len(memories.json()) == 1
+    assert memories.json()[0]["memory_kind"] == "instruction"
+
+
+@pytest.mark.asyncio
+async def test_post_follow_up_message_appends_to_session():
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+    async with session_factory() as db:
+        session = AuditSession(
+            project_id="project-1",
+            task_id="task-1",
+            runtime_stack="runtime",
+            state="completed",
+        )
+        db.add(session)
+        await db.commit()
+        session_id = session.id
+
+    app = build_test_app()
+
+    async def override_get_db():
+        async with session_factory() as db:
+            yield db
+
+    async def override_get_current_user():
+        return SimpleNamespace(id="user-1", is_active=True)
+
+    app.dependency_overrides[deps.get_db] = override_get_db
+    app.dependency_overrides[deps.get_current_user] = override_get_current_user
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://testserver") as client:
+        response = await client.post(
+            f"/api/v1/audit-sessions/{session_id}/messages",
+            json={"content": "show me the exploit details"},
+        )
+        messages = await client.get(f"/api/v1/audit-sessions/{session_id}/messages")
+
+    await engine.dispose()
+
+    assert response.status_code == 200
+    assert response.json()["role"] == "user"
+    assert response.json()["content"] == "show me the exploit details"
+    assert len(messages.json()) == 1
+    assert messages.json()[0]["sequence"] == 1
+
+
+@pytest.mark.asyncio
+async def test_get_audit_session_handoffs():
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+    async with session_factory() as db:
+        session = AuditSession(
+            project_id="project-1",
+            task_id="task-1",
+            runtime_stack="runtime",
+            state="completed",
+        )
+        db.add(session)
+        await db.flush()
+        db.add(
+            AuditHandoff(
+                session_id=session.id,
+                target="verification",
+                status="pending",
+                payload={"from_agent": "finding", "to_agent": "verification", "summary": "verify exploit"},
+            )
+        )
+        await db.commit()
+        session_id = session.id
+
+    app = build_test_app()
+
+    async def override_get_db():
+        async with session_factory() as db:
+            yield db
+
+    async def override_get_current_user():
+        return SimpleNamespace(id="user-1", is_active=True)
+
+    app.dependency_overrides[deps.get_db] = override_get_db
+    app.dependency_overrides[deps.get_current_user] = override_get_current_user
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://testserver") as client:
+        handoffs = await client.get(f"/api/v1/audit-sessions/{session_id}/handoffs")
+
+    await engine.dispose()
+
+    assert handoffs.status_code == 200
+    assert len(handoffs.json()) == 1
+    assert handoffs.json()[0]["target"] == "verification"
+
+
+@pytest.mark.asyncio
+async def test_post_follow_up_message_continues_runtime_session(monkeypatch):
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+    async with session_factory() as db:
+        session = AuditSession(
+            project_id="project-1",
+            task_id="task-1",
+            runtime_stack="runtime",
+            state="completed",
+        )
+        db.add(session)
+        await db.commit()
+        session_id = session.id
+
+    app = build_test_app()
+
+    async def override_get_db():
+        async with session_factory() as db:
+            yield db
+
+    async def override_get_current_user():
+        return SimpleNamespace(id="user-1", is_active=True)
+
+    async def fake_continue_runtime_session(*, session_id: str, content: str, db):
+        db.add(
+            AuditSessionMessage(
+                session_id=session_id,
+                sequence=2,
+                role="assistant",
+                content="Exploit chain continues here.",
+                message_metadata={"kind": "follow_up_response"},
+                payload={"continued": True},
+            )
+        )
+        await db.commit()
+
+    monkeypatch.setattr(audit_sessions_endpoint, "continue_runtime_session", fake_continue_runtime_session, raising=False)
+
+    app.dependency_overrides[deps.get_db] = override_get_db
+    app.dependency_overrides[deps.get_current_user] = override_get_current_user
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://testserver") as client:
+        response = await client.post(
+            f"/api/v1/audit-sessions/{session_id}/messages",
+            json={"content": "show me the exploit details"},
+        )
+        messages = await client.get(f"/api/v1/audit-sessions/{session_id}/messages")
+
+    await engine.dispose()
+
+    assert response.status_code == 200
+    assert len(messages.json()) == 2
+    assert messages.json()[0]["role"] == "user"
+    assert messages.json()[1]["role"] == "assistant"
+    assert messages.json()[1]["payload"]["continued"] is True

@@ -1,62 +1,8 @@
-"""
-AuditAI Agent 服务模块
-基于动态 Agent 树架构的 AI 代码安全审计
-
-架构:
-- OrchestratorAgent 作为编排层，动态调度子 Agent
-- ReconAgent 负责侦察和文件分析
-- AnalysisAgent 负责漏洞分析
-- VerificationAgent 负责验证发现
-
-工作流:
-    START → Orchestrator → [Recon/Analysis/Verification] → Report → END
-
-    支持动态创建子Agent进行专业化分析
-"""
-
-# 事件管理
-from .event_manager import EventManager, AgentEventEmitter
-
-# Agent 类
-from .agents import (
-    BaseAgent, AgentConfig, AgentResult,
-    OrchestratorAgent, ReconAgent, AnalysisAgent, VerificationAgent,
-)
-
-# 核心模块（状态管理、注册表、消息）
-from .core import (
-    AgentState, AgentStatus,
-    AgentRegistry, agent_registry,
-    AgentMessage, MessageType, MessagePriority, MessageBus,
-)
-
-# 知识模块系统（基于RAG）
-from .knowledge import (
-    KnowledgeLoader, knowledge_loader,
-    get_available_modules, get_module_content,
-    SecurityKnowledgeRAG, security_knowledge_rag,
-    SecurityKnowledgeQueryTool, GetVulnerabilityKnowledgeTool,
-)
-
-# 协作工具
-from .tools import (
-    ThinkTool, ReflectTool,
-    CreateVulnerabilityReportTool,
-    FinishScanTool,
-    CreateSubAgentTool, SendMessageTool, ViewAgentGraphTool,
-    WaitForMessageTool, AgentFinishTool,
-)
-
-# 遥测模块
-from .telemetry import Tracer, get_global_tracer, set_global_tracer
-
+"""Lazy exports for the agent service package."""
 
 __all__ = [
-    # 事件管理
     "EventManager",
     "AgentEventEmitter",
-
-    # Agent 类
     "BaseAgent",
     "AgentConfig",
     "AgentResult",
@@ -64,8 +10,6 @@ __all__ = [
     "ReconAgent",
     "AnalysisAgent",
     "VerificationAgent",
-
-    # 核心模块
     "AgentState",
     "AgentStatus",
     "AgentRegistry",
@@ -74,8 +18,6 @@ __all__ = [
     "MessageType",
     "MessagePriority",
     "MessageBus",
-
-    # 知识模块（基于RAG）
     "KnowledgeLoader",
     "knowledge_loader",
     "get_available_modules",
@@ -84,8 +26,6 @@ __all__ = [
     "security_knowledge_rag",
     "SecurityKnowledgeQueryTool",
     "GetVulnerabilityKnowledgeTool",
-
-    # 协作工具
     "ThinkTool",
     "ReflectTool",
     "CreateVulnerabilityReportTool",
@@ -95,9 +35,103 @@ __all__ = [
     "ViewAgentGraphTool",
     "WaitForMessageTool",
     "AgentFinishTool",
-
-    # 遥测模块
     "Tracer",
     "get_global_tracer",
     "set_global_tracer",
 ]
+
+
+def __getattr__(name: str):
+    if name in {"EventManager", "AgentEventEmitter"}:
+        from .event_manager import AgentEventEmitter, EventManager
+
+        return {"EventManager": EventManager, "AgentEventEmitter": AgentEventEmitter}[name]
+    if name in {"BaseAgent", "AgentConfig", "AgentResult", "OrchestratorAgent", "ReconAgent", "AnalysisAgent", "VerificationAgent"}:
+        from .agents import AnalysisAgent, AgentConfig, AgentResult, BaseAgent, OrchestratorAgent, ReconAgent, VerificationAgent
+
+        mapping = {
+            "BaseAgent": BaseAgent,
+            "AgentConfig": AgentConfig,
+            "AgentResult": AgentResult,
+            "OrchestratorAgent": OrchestratorAgent,
+            "ReconAgent": ReconAgent,
+            "AnalysisAgent": AnalysisAgent,
+            "VerificationAgent": VerificationAgent,
+        }
+        return mapping[name]
+    if name in {"AgentState", "AgentStatus", "AgentRegistry", "agent_registry", "AgentMessage", "MessageType", "MessagePriority", "MessageBus"}:
+        from .core import AgentMessage, AgentRegistry, AgentState, AgentStatus, MessageBus, MessagePriority, MessageType, agent_registry
+
+        mapping = {
+            "AgentState": AgentState,
+            "AgentStatus": AgentStatus,
+            "AgentRegistry": AgentRegistry,
+            "agent_registry": agent_registry,
+            "AgentMessage": AgentMessage,
+            "MessageType": MessageType,
+            "MessagePriority": MessagePriority,
+            "MessageBus": MessageBus,
+        }
+        return mapping[name]
+    if name in {
+        "KnowledgeLoader",
+        "knowledge_loader",
+        "get_available_modules",
+        "get_module_content",
+        "SecurityKnowledgeRAG",
+        "security_knowledge_rag",
+        "SecurityKnowledgeQueryTool",
+        "GetVulnerabilityKnowledgeTool",
+    }:
+        from .knowledge import (
+            GetVulnerabilityKnowledgeTool,
+            KnowledgeLoader,
+            SecurityKnowledgeQueryTool,
+            SecurityKnowledgeRAG,
+            get_available_modules,
+            get_module_content,
+            knowledge_loader,
+            security_knowledge_rag,
+        )
+
+        mapping = {
+            "KnowledgeLoader": KnowledgeLoader,
+            "knowledge_loader": knowledge_loader,
+            "get_available_modules": get_available_modules,
+            "get_module_content": get_module_content,
+            "SecurityKnowledgeRAG": SecurityKnowledgeRAG,
+            "security_knowledge_rag": security_knowledge_rag,
+            "SecurityKnowledgeQueryTool": SecurityKnowledgeQueryTool,
+            "GetVulnerabilityKnowledgeTool": GetVulnerabilityKnowledgeTool,
+        }
+        return mapping[name]
+    if name in {"ThinkTool", "ReflectTool", "CreateVulnerabilityReportTool", "FinishScanTool", "CreateSubAgentTool", "SendMessageTool", "ViewAgentGraphTool", "WaitForMessageTool", "AgentFinishTool"}:
+        from .tools import (
+            AgentFinishTool,
+            CreateSubAgentTool,
+            CreateVulnerabilityReportTool,
+            FinishScanTool,
+            ReflectTool,
+            SendMessageTool,
+            ThinkTool,
+            ViewAgentGraphTool,
+            WaitForMessageTool,
+        )
+
+        mapping = {
+            "ThinkTool": ThinkTool,
+            "ReflectTool": ReflectTool,
+            "CreateVulnerabilityReportTool": CreateVulnerabilityReportTool,
+            "FinishScanTool": FinishScanTool,
+            "CreateSubAgentTool": CreateSubAgentTool,
+            "SendMessageTool": SendMessageTool,
+            "ViewAgentGraphTool": ViewAgentGraphTool,
+            "WaitForMessageTool": WaitForMessageTool,
+            "AgentFinishTool": AgentFinishTool,
+        }
+        return mapping[name]
+    if name in {"Tracer", "get_global_tracer", "set_global_tracer"}:
+        from .telemetry import Tracer, get_global_tracer, set_global_tracer
+
+        return {"Tracer": Tracer, "get_global_tracer": get_global_tracer, "set_global_tracer": set_global_tracer}[name]
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

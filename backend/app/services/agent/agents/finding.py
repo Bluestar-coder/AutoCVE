@@ -2,10 +2,11 @@ import json
 import re
 import os
 import tempfile
+import time
 from typing import Any, Dict, List, Optional
 
 from .analysis_workflow import AnalysisWorkflowAgent
-from .base import AgentType
+from .base import AgentResult, AgentType
 from .finding_controller import FindingController
 from .finding_evidence import EvidenceBundleStore
 from .finding_loop_detector import FindingLoopDetector
@@ -14,6 +15,9 @@ from .finding_skill_protocol import build_finding_skill_protocol
 from .finding_skill_router import build_finding_skill_route_message
 from .finding_synthesizer import FindingSynthesizer
 from .finding_worker import CandidateWorker
+from ..skill_service import SkillService
+from app.services.finding_runtime.bridge import FindingRuntimeBridge
+from app.services.finding_runtime.config import FindingRuntimeStack, coerce_finding_runtime_stack
 
 
 FINDING_SYSTEM_PROMPT = """你是 AuditAI 的高级漏洞挖掘 Agent，你的唯一使命是通过源码审计发现能够申报 CVE 或能被 各大厂商src / HackerOne / Bugcrowd 等赏金平台接收的真实安全漏洞。
@@ -340,6 +344,7 @@ Final Answer: {
 7. 输出必须与 Analysis Agent 的 findings 结构保持兼容（exploit_chain 和 poc 为新增扩展字段）。"""
 
 
+
 class FindingAgent(AnalysisWorkflowAgent):
     finding_origin = "direct_finding"
     evidence_type = "source-analysis"
@@ -401,6 +406,97 @@ class FindingAgent(AnalysisWorkflowAgent):
         self._last_observation_candidate_id = None
         self._last_iteration_control_prompt = ""
         self._task_id = ""
+        self._runtime_bridge_factory = None
+
+    def _resolve_runtime_stack(self, input_data: Dict[str, Any]) -> FindingRuntimeStack:
+        config = input_data.get("config", {}) or {}
+        workflow = config.get("workflow", {}) or {}
+        raw_value = (
+            config.get("finding_runtime_stack")
+            or workflow.get("finding_runtime_stack")
+            or input_data.get("finding_runtime_stack")
+        )
+        return coerce_finding_runtime_stack(raw_value)
+
+    def _build_runtime_bridge(self, user_id: str | None):
+        if callable(self._runtime_bridge_factory):
+            return self._runtime_bridge_factory(user_id)
+        return FindingRuntimeBridge(
+            llm_service=self.llm_service,
+            tools=self.tools,
+            user_id=user_id,
+        )
+
+    async def _run_runtime_stack(self, input_data: Dict[str, Any]):
+        start_time = time.time()
+        context = self._get_project_context(input_data)
+        context["skill_context"] = await SkillService.resolve_agent_skills(
+            context.get("config", {}).get("user_id"),
+            self.agent_type.value,
+            context,
+        )
+        initial_message = self._build_initial_message(context)
+        self.record_work("Starting runtime finding workflow")
+        await self.emit_agent_start_debug(
+            {
+                "task": context.get("task", ""),
+                "task_context": context.get("task_context", ""),
+                "project_info": context.get("project_info", {}),
+                "skill_context": context.get("skill_context", {}),
+                "runtime_stack": FindingRuntimeStack.RUNTIME.value,
+            }
+        )
+        await self.emit_prompt_debug("system", self.config.system_prompt)
+        await self.emit_prompt_debug("user", initial_message)
+        await self.emit_thinking("Running runtime finding session...")
+
+        project_id = str(
+            input_data.get("project_id")
+            or context.get("project_info", {}).get("project_id")
+            or "runtime-project"
+        )
+        bridge = self._build_runtime_bridge(context.get("config", {}).get("user_id"))
+        bridge_result = await bridge.run(
+            project_id=project_id,
+            task_id=str(context.get("task_id", "") or "") or None,
+            system_prompt=self.config.system_prompt,
+            recon_payload=context.get("recon_data", {}) or {},
+            user_message=initial_message,
+            model_name=self.agent_type.value,
+            max_turns=self.config.max_iterations,
+        )
+        final_payload = bridge_result.get("final_payload") or {
+            "findings": [],
+            "summary": "Runtime finding session completed without a parseable final answer.",
+        }
+        processed = self._postprocess_result(final_payload)
+        processed["runtime_session_id"] = bridge_result["session_id"]
+        processed["steps"] = []
+        processed["skill_route"] = bridge_result.get("skill_route") or {}
+        processed["memory_counts"] = bridge_result.get("memory_counts") or {}
+        handoff = self._build_handoff(processed)
+        if handoff:
+            bridge.record_handoff(bridge_result["session_id"], handoff.to_dict())
+            await self.emit_handoff_debug("out", handoff)
+        await self.emit_llm_complete(processed.get("summary", "runtime finding complete"), 0)
+        return AgentResult(
+            success=True,
+            data=processed,
+            iterations=int(bridge_result.get("turn_count") or 0),
+            tool_calls=int(bridge_result.get("tool_call_count") or 0),
+            tokens_used=0,
+            duration_ms=int((time.time() - start_time) * 1000),
+            metadata={
+                "runtime_stack": FindingRuntimeStack.RUNTIME.value,
+                "runtime_session_id": bridge_result["session_id"],
+            },
+            handoff=handoff,
+        )
+
+    async def run(self, input_data: Dict[str, Any]):
+        if self._resolve_runtime_stack(input_data) is FindingRuntimeStack.RUNTIME:
+            return await self._run_runtime_stack(input_data)
+        return await super().run(input_data)
 
     def _use_structured_tool_calling(self) -> bool:
         return True
@@ -941,50 +1037,107 @@ class FindingAgent(AnalysisWorkflowAgent):
         project_info = context["project_info"]
         config = context["config"]
         recon_data = context["recon_data"]
-        project_profile = recon_data.get("project_profile", {})
-        priority_paths = recon_data.get("priority_paths", recon_data.get("high_risk_areas", []))
-        entry_points = recon_data.get("entry_points", [])
-        target_files = context.get("target_files") or recon_data.get("audit_targets", {}).get("target_files", [])
-        exclude_patterns = context.get("exclude_patterns") or recon_data.get("audit_targets", {}).get("exclude_patterns", [])
-        focus_vulnerabilities = context.get("focus_vulnerabilities") or config.get("target_vulnerabilities", [])
+        project_profile = (recon_data.get("project_profile", {}) or recon_data.get("data", {}).get("project_profile", {}) or {})
+        project_structure = (recon_data.get("project_structure", {}) or recon_data.get("data", {}).get("project_structure", {}) or {})
+        recommended_scanners = dict(recon_data.get("recommended_scanners", {}) or recon_data.get("data", {}).get("recommended_scanners", {}) or {})
+        entry_points = recon_data.get("entry_points", []) or recon_data.get("data", {}).get("entry_points", []) or []
+        target_files = context.get("target_files") or recon_data.get("audit_targets", {}).get("target_files", []) or recon_data.get("data", {}).get("audit_targets", {}).get("target_files", [])
+        exclude_patterns = context.get("exclude_patterns") or recon_data.get("audit_targets", {}).get("exclude_patterns", []) or recon_data.get("data", {}).get("audit_targets", {}).get("exclude_patterns", [])
         task_context = context.get("task_context") or context.get("task") or ""
         skill_guidance = build_finding_skill_route_message(context, context.get("skill_context", {}))
-        message = f"""请直接审查项目源码，挖掘扫描器容易漏掉的漏洞。
 
-项目信息：
-- 名称: {project_info.get('name', 'unknown')}
-- 根目录: {project_info.get('root', '.')}
-- 语言: {json.dumps(project_profile.get('languages', []), ensure_ascii=False)}
-- 框架: {json.dumps(project_profile.get('frameworks', []), ensure_ascii=False)}
-- 数据库: {json.dumps(project_profile.get('databases', []), ensure_ascii=False)}
+        def ordered_unique(values: List[Any]) -> List[Any]:
+            result: List[Any] = []
+            for value in values:
+                if isinstance(value, dict):
+                    if value not in result:
+                        result.append(value)
+                    continue
+                text = str(value or "").strip()
+                if text and text not in result:
+                    result.append(text)
+            return result
 
-重点目录：
+        focus_hints = ordered_unique(
+            context.get("focus_vulnerabilities")
+            or config.get("focus_vulnerabilities")
+            or []
+        )
+
+        repository_structure = project_info.get("structure") if isinstance(project_info.get("structure"), dict) else {}
+        languages = ordered_unique((project_profile.get("languages") or []) + (project_info.get("languages") or []))
+        frameworks = ordered_unique((project_profile.get("frameworks") or []) + (project_info.get("frameworks") or []))
+        databases = ordered_unique((project_profile.get("databases") or []) + (project_info.get("databases") or []))
+        priority_paths = ordered_unique(
+            ((recon_data.get("priority_paths") or recon_data.get("data", {}).get("priority_paths", [])) or [])
+            + (project_structure.get("key_directories") or [])
+            + (repository_structure.get("directories") or [])
+        )
+        entry_points = entry_points[:20]
+        target_files = ordered_unique((target_files or []) + (project_structure.get("key_files") or []))
+
+        scanners_must_use = ordered_unique(recommended_scanners.get("must_use") or [])
+        scanners_optional = ordered_unique(recommended_scanners.get("optional") or [])
+        if scanners_must_use or scanners_optional:
+            if not scanners_optional:
+                if "Python" in languages:
+                    scanners_optional.extend(["bandit_scan", "safety_scan"])
+                if any(language in {"JavaScript", "TypeScript", "JavaScript/TypeScript"} for language in languages):
+                    scanners_optional.append("npm_audit")
+                if "Java" in languages:
+                    scanners_optional.append("osv_scan")
+                if len(target_files) >= 50:
+                    scanners_optional.append("kunlun_scan")
+                scanners_optional = ordered_unique(scanners_optional)
+        recommended_scanners = {
+            "must_use": scanners_must_use,
+            "optional": scanners_optional,
+            "reason": recommended_scanners.get("reason") or "",
+        }
+
+        recon_summary = ((recon_data.get("summary") or recon_data.get("data", {}).get("summary") or "").strip())
+        if not recon_summary:
+            recon_summary = "Recon context was incomplete, so this prompt falls back to repository structure and direct source review."
+
+        message = f"""Review the repository directly and look for any CVE-grade vulnerabilities that can be justified from source code evidence.
+
+Project information:
+- Name: {project_info.get('name', 'unknown')}
+- Root directory: {project_info.get('root', '.')}
+- Languages: {json.dumps(languages, ensure_ascii=False)}
+- Frameworks: {json.dumps(frameworks, ensure_ascii=False)}
+- Databases: {json.dumps(databases, ensure_ascii=False)}
+
+Priority paths:
 {json.dumps(priority_paths[:25], ensure_ascii=False, indent=2)}
 
-入口点：
-{json.dumps(entry_points[:20], ensure_ascii=False, indent=2)}
+Entry points:
+{json.dumps(entry_points, ensure_ascii=False, indent=2)}
 
-目标文件：
+Target files:
 {json.dumps(target_files[:50], ensure_ascii=False, indent=2)}
 
-排除规则：
+Exclude patterns:
 {json.dumps(exclude_patterns[:20], ensure_ascii=False, indent=2)}
 
-用户关注漏洞类型：
-{json.dumps(focus_vulnerabilities[:20], ensure_ascii=False, indent=2)}
+Recommended scanners:
+{json.dumps(recommended_scanners, ensure_ascii=False, indent=2)}
 
-审计任务上下文：
-{task_context or "未提供额外上下文"}
+Recon summary:
+{recon_summary}
 
-重点关注：
-- 优先顺序: 目标文件 > 入口点 > priority_paths > 认证/授权链 > 敏感状态变更 > 多步业务流程
-- 认证与对象访问控制
-- 认证绕过与信任边界错误
-- 业务逻辑漏洞
-- 关键流程缺少校验
-- 敏感状态变更缺少保护
+Audit task context:
+User-provided audit hints:
+{json.dumps(focus_hints, ensure_ascii=False, indent=2)}
 
-        不要依赖 Scan Agent 输出，必须基于直接代码阅读和推理给出结论。"""
+{task_context or 'No extra task context provided.'}
+
+Audit priorities:
+- Prioritize target files > entry points > priority paths > auth/authz chains > sensitive state changes > multi-step business logic.
+- Consider any externally triggerable CVE-grade issue. Do not narrow the audit to preset vulnerability families.
+- Do not rely on Scan Agent output. Base conclusions on direct code reading and reasoning.
+- Keep reviewing until you can either prove a CVE-grade exploit chain or explain why the current candidate does not meet that bar.
+"""
         message = message + "\n\n" + skill_guidance
         preloaded_skill_context = context.get("preloaded_skill_context")
         if preloaded_skill_context:
@@ -1009,7 +1162,6 @@ class FindingAgent(AnalysisWorkflowAgent):
             coverage_summary = {
                 "strategy": runtime_state.plan.strategy,
                 "phase": runtime_state.phase,
-                "focus_vulnerabilities": runtime_state.plan.focus_vulnerabilities,
                 "max_iterations": self.config.max_iterations,
                 "report_finalization_threshold": self.REPORT_FINALIZATION_THRESHOLD,
                 "entry_points": runtime_state.coverage.entry_points[:12],
@@ -1399,3 +1551,5 @@ class FindingAgent(AnalysisWorkflowAgent):
             }
         )
         return handoff
+
+

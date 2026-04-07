@@ -1,6 +1,6 @@
-/**
+﻿/**
  * Agent Tasks API
- * Agent 审计任务相关的 API 调用
+ * Agent 瀹¤浠诲姟鐩稿叧鐨?API 璋冪敤
  */
 
 import { apiClient } from "./serverClient";
@@ -16,48 +16,50 @@ export interface AgentTask {
   status: string;
   current_phase: string | null;
   current_step: string | null;
+  runtime_session_id?: string | null;
+  finding_runtime_stack?: string | null;
 
-  // 统计
+  // 缁熻
   total_files: number;
   indexed_files: number;
   analyzed_files: number;
-  files_with_findings: number;  // 有漏洞发现的文件数
+  files_with_findings: number;  // 鏈夋紡娲炲彂鐜扮殑鏂囦欢鏁?
   total_chunks: number;
   findings_count: number;
   verified_count: number;
   false_positive_count: number;
 
-  // Agent 统计
+  // Agent 缁熻
   total_iterations: number;
   tool_calls_count: number;
   tokens_used: number;
 
-  // 严重程度统计
+  // 涓ラ噸绋嬪害缁熻
   critical_count: number;
   high_count: number;
   medium_count: number;
   low_count: number;
 
-  // 评分
+  // 璇勫垎
   quality_score: number;
   security_score: number | null;
 
-  // 时间
+  // 鏃堕棿
   created_at: string;
   started_at: string | null;
   completed_at: string | null;
 
-  // 进度
+  // 杩涘害
   progress_percentage: number;
 
-  // 配置
+  // 閰嶇疆
   audit_scope: Record<string, unknown> | null;
   target_vulnerabilities: string[] | null;
   verification_level: string | null;
   exclude_patterns: string[] | null;
   target_files: string[] | null;
 
-  // 错误信息
+  // 閿欒淇℃伅
   error_message: string | null;
 }
 
@@ -151,6 +153,7 @@ export interface CreateAgentTaskRequest {
   max_iterations?: number;
   token_budget?: number;
   timeout_seconds?: number;
+  finding_runtime_stack?: "legacy" | "runtime";
 }
 
 export interface AgentTaskSummary {
@@ -182,7 +185,7 @@ export interface AgentTaskSummary {
 // ============ API Functions ============
 
 /**
- * 创建 Agent 审计任务
+ * 鍒涘缓 Agent 瀹¤浠诲姟
  */
 export async function createAgentTask(data: CreateAgentTaskRequest): Promise<AgentTask> {
   const response = await apiClient.post("/agent-tasks/", data);
@@ -190,7 +193,7 @@ export async function createAgentTask(data: CreateAgentTaskRequest): Promise<Age
 }
 
 /**
- * 获取 Agent 任务列表
+ * 鑾峰彇 Agent 浠诲姟鍒楄〃
  */
 export async function getAgentTasks(params?: {
   project_id?: string;
@@ -203,7 +206,7 @@ export async function getAgentTasks(params?: {
 }
 
 /**
- * 获取 Agent 任务详情
+ * 鑾峰彇 Agent 浠诲姟璇︽儏
  */
 export async function getAgentTask(taskId: string): Promise<AgentTask> {
   const response = await apiClient.get(`/agent-tasks/${taskId}`);
@@ -211,7 +214,7 @@ export async function getAgentTask(taskId: string): Promise<AgentTask> {
 }
 
 /**
- * 启动 Agent 任务
+ * 鍚姩 Agent 浠诲姟
  */
 export async function startAgentTask(taskId: string): Promise<{ message: string; task_id: string }> {
   const response = await apiClient.post(`/agent-tasks/${taskId}/start`);
@@ -219,7 +222,7 @@ export async function startAgentTask(taskId: string): Promise<{ message: string;
 }
 
 /**
- * 取消 Agent 任务
+ * 鍙栨秷 Agent 浠诲姟
  */
 export async function cancelAgentTask(taskId: string): Promise<{ message: string; task_id: string }> {
   const response = await apiClient.post(`/agent-tasks/${taskId}/cancel`);
@@ -227,7 +230,7 @@ export async function cancelAgentTask(taskId: string): Promise<{ message: string
 }
 
 /**
- * 获取 Agent 任务事件列表
+ * 鑾峰彇 Agent 浠诲姟浜嬩欢鍒楄〃
  */
 export async function getAgentEvents(
   taskId: string,
@@ -238,7 +241,7 @@ export async function getAgentEvents(
 }
 
 /**
- * 获取 Agent 任务发现列表
+ * 鑾峰彇 Agent 浠诲姟鍙戠幇鍒楄〃
  */
 export async function getAgentFindings(
   taskId: string,
@@ -253,7 +256,7 @@ export async function getAgentFindings(
 }
 
 /**
- * 获取单个发现详情
+ * 鑾峰彇鍗曚釜鍙戠幇璇︽儏
  */
 export async function getAgentFinding(taskId: string, findingId: string): Promise<AgentFinding> {
   const response = await apiClient.get(`/agent-tasks/${taskId}/findings/${findingId}`);
@@ -261,7 +264,7 @@ export async function getAgentFinding(taskId: string, findingId: string): Promis
 }
 
 /**
- * 更新发现状态
+ * 鏇存柊鍙戠幇鐘舵€?
  */
 export async function updateAgentFinding(
   taskId: string,
@@ -273,7 +276,7 @@ export async function updateAgentFinding(
 }
 
 /**
- * 获取任务摘要
+ * 鑾峰彇浠诲姟鎽樿
  */
 export async function getAgentTaskSummary(taskId: string): Promise<AgentTaskSummary> {
   const response = await apiClient.get(`/agent-tasks/${taskId}/summary`);
@@ -281,19 +284,19 @@ export async function getAgentTaskSummary(taskId: string): Promise<AgentTaskSumm
 }
 
 /**
- * 创建 SSE 事件源
+ * 鍒涘缓 SSE 浜嬩欢婧?
  */
 export function createAgentEventSource(taskId: string, afterSequence = 0): EventSource {
   const baseUrl = import.meta.env.VITE_API_URL || "";
   const url = `${baseUrl}/api/v1/agent-tasks/${taskId}/events?after_sequence=${afterSequence}`;
 
-  // 注意：EventSource 不支持自定义 headers，需要通过 URL 参数或 cookie 传递认证
-  // 如果需要认证，可以考虑使用 fetch + ReadableStream 替代
+  // 娉ㄦ剰锛欵ventSource 涓嶆敮鎸佽嚜瀹氫箟 headers锛岄渶瑕侀€氳繃 URL 鍙傛暟鎴?cookie 浼犻€掕璇?
+  // 濡傛灉闇€瑕佽璇侊紝鍙互鑰冭檻浣跨敤 fetch + ReadableStream 鏇夸唬
   return new EventSource(url, { withCredentials: true });
 }
 
 /**
- * 使用 fetch 流式获取事件（支持自定义 headers）
+ * 浣跨敤 fetch 娴佸紡鑾峰彇浜嬩欢锛堟敮鎸佽嚜瀹氫箟 headers锛?
  */
 export async function* streamAgentEvents(
   taskId: string,
@@ -334,7 +337,7 @@ export async function* streamAgentEvents(
 
       buffer += decoder.decode(value, { stream: true });
 
-      // 解析 SSE 格式
+      // 瑙ｆ瀽 SSE 鏍煎紡
       const lines = buffer.split("\n");
       buffer = lines.pop() || "";
 
@@ -345,7 +348,7 @@ export async function* streamAgentEvents(
             const event = JSON.parse(data) as AgentEvent;
             yield event;
           } catch {
-            // 忽略解析错误
+            // 蹇界暐瑙ｆ瀽閿欒
           }
         }
       }
@@ -412,7 +415,7 @@ export interface CheckpointDetail extends AgentCheckpoint {
 // ============ Agent Tree API Functions ============
 
 /**
- * 获取任务的 Agent 树结构
+ * 鑾峰彇浠诲姟鐨?Agent 鏍戠粨鏋?
  */
 export async function getAgentTree(taskId: string): Promise<AgentTreeResponse> {
   const response = await apiClient.get(`/agent-tasks/${taskId}/agent-tree`);
@@ -420,7 +423,7 @@ export async function getAgentTree(taskId: string): Promise<AgentTreeResponse> {
 }
 
 /**
- * 获取任务的检查点列表
+ * 鑾峰彇浠诲姟鐨勬鏌ョ偣鍒楄〃
  */
 export async function getAgentCheckpoints(
   taskId: string,
@@ -431,7 +434,7 @@ export async function getAgentCheckpoints(
 }
 
 /**
- * 获取检查点详情
+ * 鑾峰彇妫€鏌ョ偣璇︽儏
  */
 export async function getCheckpointDetail(
   taskId: string,
@@ -443,7 +446,7 @@ export async function getCheckpointDetail(
 
 
 /**
- * 下载 Agent 任务报告
+ * 涓嬭浇 Agent 浠诲姟鎶ュ憡
  */
 export async function downloadAgentReport(taskId: string, format: "markdown" | "json" | "html" = "markdown", templateId?: string): Promise<void> {
   const response = await apiClient.get(`/agent-tasks/${taskId}/report`, {
@@ -478,4 +481,5 @@ export async function downloadAgentReport(taskId: string, format: "markdown" | "
   link.parentNode?.removeChild(link);
   window.URL.revokeObjectURL(url);
 }
+
 

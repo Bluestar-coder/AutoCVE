@@ -61,6 +61,15 @@ class TestFileTools:
         assert "sql_vuln.py" in result.data
 
     @pytest.mark.asyncio
+    async def test_file_search_tool_accepts_query_alias(self, temp_project_dir):
+        tool = FileSearchTool(temp_project_dir)
+
+        result = await tool.execute(query="cursor.execute")
+
+        assert result.success is True
+        assert "sql_vuln.py" in result.data
+
+    @pytest.mark.asyncio
     async def test_read_many_files_tool_reads_multiple_files(self, temp_project_dir):
         tool = ReadManyFilesTool(temp_project_dir)
 

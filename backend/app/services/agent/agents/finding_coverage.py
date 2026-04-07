@@ -24,7 +24,7 @@ class CoverageBuilder:
     def build(self, context: Dict[str, object]) -> CoverageMap:
         recon_data = context.get("recon_data", {}) or {}
         entry_points = self._extract_entry_points(recon_data.get("entry_points", []))
-        priority_paths = self._ordered_unique(recon_data.get("priority_paths", []) or recon_data.get("high_risk_areas", []) or [])
+        priority_paths = self._ordered_unique(recon_data.get("priority_paths", []) or [])
 
         coverage = CoverageMap(
             entry_points=entry_points,

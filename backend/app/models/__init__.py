@@ -1,4 +1,4 @@
-from .user import User
+﻿from .user import User
 from .user_config import UserConfig
 from .project import Project, ProjectMember
 from .audit import AuditTask, AuditIssue
@@ -15,5 +15,21 @@ from .agent_task import (
     VulnerabilitySeverity,
     VulnerabilityType,
     FindingStatus,
+)
+from .audit_session import (
+    AuditArtifact,
+    AuditCheckpoint,
+    AuditCheckpointType,
+    AuditHandoff,
+    AuditMemory,
+    AuditMemoryKind,
+    AuditSession,
+    AuditSessionMessage,
+    AuditSessionTurn,
+    AuditSkill,
+    AuditSkillInvocation,
+    AuditSkillInvocationStatus,
+    AuditToolCall,
+    AuditToolCallStatus,
 )
 from .report_template import AgentTaskReport

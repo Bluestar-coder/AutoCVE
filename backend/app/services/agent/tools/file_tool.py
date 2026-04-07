@@ -405,9 +405,23 @@ class FileSearchTool(AgentTool):
         with open(file_path, "r", encoding="utf-8", errors="ignore") as handle:
             return handle.readlines()
 
+    @staticmethod
+    def _normalize_keyword_input(
+        keyword: Optional[str] = None,
+        **kwargs,
+    ) -> Optional[str]:
+        if isinstance(keyword, str) and keyword.strip():
+            return keyword.strip()
+
+        for alias in ("query", "pattern", "term", "text", "needle", "raw_input"):
+            candidate = kwargs.get(alias)
+            if isinstance(candidate, str) and candidate.strip():
+                return candidate.strip()
+        return None
+
     async def _execute(
         self,
-        keyword: str,
+        keyword: Optional[str] = None,
         file_pattern: Optional[str] = None,
         directory: Optional[str] = None,
         case_sensitive: bool = False,
@@ -415,16 +429,25 @@ class FileSearchTool(AgentTool):
         is_regex: bool = False,
         **kwargs,
     ) -> ToolResult:
-        del kwargs
+        normalized_keyword = self._normalize_keyword_input(keyword, **kwargs)
+        if not normalized_keyword:
+            return ToolResult(
+                success=False,
+                error="Missing required search keyword. Provide keyword, query, pattern, term, or text.",
+            )
+
         search_dir = self.project_root if not directory else _resolve_allowed_path(directory, self.allowed_roots)
         if not search_dir:
-            return ToolResult(success=False, error="安全错误：不允许搜索项目目录外的内容")
+            return ToolResult(
+                success=False,
+                error="Security error: search is limited to the audit project and approved shared roots.",
+            )
 
         flags = 0 if case_sensitive else re.IGNORECASE
         try:
-            pattern = re.compile(keyword if is_regex else re.escape(keyword), flags)
+            pattern = re.compile(normalized_keyword if is_regex else re.escape(normalized_keyword), flags)
         except re.error as exc:
-            return ToolResult(success=False, error=f"无效的搜索模式: {exc}")
+            return ToolResult(success=False, error=f"Invalid search pattern: {exc}")
 
         results: List[Dict[str, Any]] = []
         files_searched = 0
@@ -437,7 +460,10 @@ class FileSearchTool(AgentTool):
                 display_path = _best_display_path(full_path, self.project_root, self.allowed_roots, full_path)
                 if self.target_files and display_path not in self.target_files and display_path.startswith("skill_library/") is False:
                     continue
-                if any(fnmatch.fnmatch(display_path, pattern_text) or fnmatch.fnmatch(filename, pattern_text) for pattern_text in self.exclude_patterns):
+                if any(
+                    fnmatch.fnmatch(display_path, pattern_text) or fnmatch.fnmatch(filename, pattern_text)
+                    for pattern_text in self.exclude_patterns
+                ):
                     continue
 
                 try:
@@ -473,28 +499,30 @@ class FileSearchTool(AgentTool):
         if not results:
             return ToolResult(
                 success=True,
-                data=f"没有找到匹配 '{keyword}' 的内容\n搜索了 {files_searched} 个文件",
-                metadata={"files_searched": files_searched, "matches": 0},
+                data=f"No matches found for '{normalized_keyword}'.\nSearched {files_searched} files.",
+                metadata={"files_searched": files_searched, "matches": 0, "keyword": normalized_keyword},
             )
 
-        output_parts = [f"搜索结果: '{keyword}'\n", f"找到 {len(results)} 处匹配（搜索了 {files_searched} 个文件）\n"]
+        output_parts = [
+            f"Search results for '{normalized_keyword}'\n",
+            f"Found {len(results)} matches across {files_searched} files.\n",
+        ]
         for result in results:
-            output_parts.append(f"\n文件 {result['file']}:{result['line']}")
+            output_parts.append(f"\nFile {result['file']}:{result['line']}")
             output_parts.append(f"```\n{result['context']}\n```")
         if len(results) >= max_results:
-            output_parts.append(f"\n... 结果已截断（最大 {max_results} 条）")
+            output_parts.append(f"\n... results truncated (max {max_results})")
 
         return ToolResult(
             success=True,
-            data="\n".join(output_parts),
+            data="\\n".join(output_parts),
             metadata={
-                "keyword": keyword,
+                "keyword": normalized_keyword,
                 "files_searched": files_searched,
                 "matches": len(results),
                 "results": results[:10],
             },
         )
-
 
 class ListFilesTool(AgentTool):
     DEFAULT_EXCLUDE_DIRS = {

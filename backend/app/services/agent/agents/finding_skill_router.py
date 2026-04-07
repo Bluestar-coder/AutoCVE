@@ -175,7 +175,7 @@ def resolve_finding_skill_routes(context: Dict[str, Any], skill_context: Dict[st
             context.get("task"),
             context.get("task_context"),
             context.get("focus_vulnerabilities", []),
-            config.get("target_vulnerabilities", []),
+
             recon_data.get("summary"),
             recon_data.get("priority_paths", []),
             recon_data.get("entry_points", []),

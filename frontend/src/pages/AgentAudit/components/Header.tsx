@@ -4,7 +4,8 @@
  * Features: Enhanced glow effects, refined controls, premium feel
  */
 
-import { Square, Download, Play, Loader2, Radio, Cpu, Sparkles } from "lucide-react";
+import { Square, Download, Loader2, Radio, Cpu, Sparkles, MessagesSquare } from "lucide-react";
+import { Link } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { StatusBadge } from "./StatusBadge";
 import type { HeaderProps } from "../types";
@@ -13,6 +14,7 @@ export function Header({
   task,
   isRunning,
   isCancelling,
+  sessionHref,
   onCancel,
   onExport,
   onNewAudit
@@ -91,6 +93,19 @@ export function Header({
         )}
 
         <div className="h-8 w-px bg-border/50 mx-1" />
+
+        {sessionHref && (
+          <Link to={sessionHref}>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-9 px-4 text-xs font-mono uppercase tracking-wider text-amber-300 hover:text-amber-200 bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/30 hover:border-amber-500/50 transition-all duration-300 rounded-md shadow-[0_0_15px_rgba(245,158,11,0.12)] hover:shadow-[0_0_20px_rgba(245,158,11,0.2)]"
+            >
+              <MessagesSquare className="w-3.5 h-3.5 mr-2" />
+              <span>Session</span>
+            </Button>
+          </Link>
+        )}
 
         <Button
           variant="ghost"

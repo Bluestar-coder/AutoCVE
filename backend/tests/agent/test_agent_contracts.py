@@ -1,4 +1,4 @@
-from unittest.mock import MagicMock
+﻿from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -148,6 +148,11 @@ def test_finding_initial_message_includes_recon_navigation_and_user_scope(findin
             "entry_points": [{"type": "http", "file": "src/api.py", "line": 12}],
             "priority_paths": ["src/api.py", "src/auth.py"],
             "audit_targets": {"target_files": ["src/api.py"], "exclude_patterns": ["tests/**"]},
+            "recommended_scanners": {
+                "must_use": ["semgrep_scan"],
+                "optional": ["bandit_scan"],
+                "reason": "Python web service",
+            },
             "summary": "FastAPI service with auth middleware",
         },
         "handoff_context": "",
@@ -165,7 +170,34 @@ def test_finding_initial_message_includes_recon_navigation_and_user_scope(findin
     assert "auth_bypass" in message
     assert "FastAPI" in message
     assert "PostgreSQL" in message
+    assert "semgrep_scan" in message
+    assert "bandit_scan" in message
     assert "audit payment ownership flow" in message
+
+
+def test_finding_initial_message_ignores_legacy_recon_keys_when_canonical_data_missing(finding_agent):
+    context = {
+        "project_info": {"name": "demo", "root": "/tmp/demo"},
+        "config": {},
+        "task": "",
+        "task_context": "audit API ownership flow",
+        "recon_data": {
+            "tech_stack": {"languages": ["Python"], "frameworks": ["FastAPI"]},
+            "high_risk_areas": ["legacy/path.py"],
+            "recommended_tools": {"must_use": ["semgrep_scan"]},
+        },
+        "handoff_context": "",
+        "focus_vulnerabilities": [],
+        "target_files": [],
+        "exclude_patterns": [],
+        "skill_context": {},
+    }
+
+    message = finding_agent._build_initial_message(context)
+
+    assert "legacy/path.py" not in message
+    assert "semgrep_scan" not in message
+    assert "FastAPI" not in message
 
 
 def test_finding_system_prompt_includes_code_audit_skill_overlay(finding_agent):
@@ -937,3 +969,98 @@ async def test_save_findings_uses_supported_status_and_model_fields(mock_db_sess
     assert record.is_verified is True
     assert record.references == ["CWE-22", "OWASP A01"]
     assert record.finding_metadata["raw_finding"]["title"] == "Confirmed traversal in uploadLocal"
+
+
+
+@pytest.mark.asyncio
+async def test_finding_runtime_stack_preserves_verification_handoff_contract(finding_agent, mock_event_emitter, monkeypatch):
+    class FakeBridge:
+        def __init__(self):
+            self.run_calls = []
+            self.recorded_handoffs = []
+
+        async def run(self, **kwargs):
+            self.run_calls.append(kwargs)
+            return {
+                "session_id": "runtime-session-1",
+                "final_payload": {
+                    "findings": [
+                        {
+                            "vulnerability_type": "auth_bypass",
+                            "severity": "high",
+                            "title": "Tenant approval endpoint leaks cross-tenant actions",
+                            "description": "Authorization is bypassed on the approval flow.",
+                            "file_path": "app/api/uploads.py",
+                            "line_start": 18,
+                            "line_end": 34,
+                            "code_snippet": "approve_upload(upload_id)",
+                            "source": "POST /api/uploads/{id}/approve",
+                            "sink": "approve_upload without tenant guard",
+                            "suggestion": "Re-check tenant ownership before approval.",
+                            "confidence": 0.91,
+                            "needs_verification": True,
+                            "verdict": "candidate",
+                            "entry_point_refs": ["POST /api/uploads/{id}/approve"],
+                            "priority_path_refs": ["app/api/uploads.py"],
+                            "business_flow_notes": ["Approval requires tenant scoping."],
+                            "evidence_gaps": ["Need sandbox proof for cross-tenant approval."],
+                        }
+                    ],
+                    "summary": "Found one high-confidence authorization bypass candidate.",
+                },
+                "turn_count": 2,
+                "tool_call_count": 3,
+                "skill_route": {"primary_skill": "code-audit-finding"},
+                "memory_counts": {"instruction": 1, "recall": 1},
+            }
+
+        def record_handoff(self, session_id, handoff_payload, *, status="pending"):
+            self.recorded_handoffs.append(
+                {"session_id": session_id, "handoff_payload": handoff_payload, "status": status}
+            )
+            return "handoff-1"
+
+    bridge = FakeBridge()
+    finding_agent._runtime_bridge_factory = lambda user_id: bridge
+    finding_agent._build_initial_message = lambda context: "audit this repo"
+    monkeypatch.setattr(
+        SkillService,
+        "resolve_agent_skills",
+        AsyncMock(return_value={"route_plan": {"primary_skill": "code-audit-finding"}}),
+    )
+
+    result = await finding_agent.run(
+        {
+            "project_id": "project-1",
+            "project_info": {"name": "demo", "root": "/tmp/demo"},
+            "task_id": "task-1",
+            "task": "Audit upload approval flow",
+            "task_context": "Focus on tenant isolation.",
+            "recon_data": {"summary": "FastAPI upload service"},
+            "config": {
+                "user_id": "user-1",
+                "finding_runtime_stack": "runtime",
+                "workflow": {"finding_runtime_stack": "runtime"},
+            },
+        }
+    )
+
+    assert result.success is True
+    assert result.metadata["runtime_stack"] == "runtime"
+    assert result.metadata["runtime_session_id"] == "runtime-session-1"
+    assert result.iterations == 2
+    assert result.tool_calls == 3
+    assert result.data["runtime_session_id"] == "runtime-session-1"
+    assert result.data["skill_route"] == {"primary_skill": "code-audit-finding"}
+    assert result.data["memory_counts"] == {"instruction": 1, "recall": 1}
+    assert result.handoff is not None
+    assert result.handoff.to_agent == "verification"
+    assert result.handoff.context_data["entry_point_refs"] == ["POST /api/uploads/{id}/approve"]
+    assert result.handoff.context_data["priority_path_refs"] == ["app/api/uploads.py"]
+    assert result.handoff.context_data["business_flow_notes"] == ["Approval requires tenant scoping."]
+    assert "Need sandbox proof for cross-tenant approval." in result.handoff.context_data["evidence_gaps"]
+    assert bridge.run_calls[0]["project_id"] == "project-1"
+    assert bridge.run_calls[0]["task_id"] == "task-1"
+    assert bridge.recorded_handoffs[0]["session_id"] == "runtime-session-1"
+    assert bridge.recorded_handoffs[0]["handoff_payload"]["to_agent"] == "verification"
+

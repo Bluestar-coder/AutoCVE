@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Audit Tasks Page
  * Cyberpunk Terminal Aesthetic
  * 支持普通审计任务和Agent审计任务
@@ -25,7 +25,8 @@ import {
   Terminal,
   Bot,
   Zap,
-  Download
+  Download,
+  MessagesSquare,
 } from "lucide-react";
 import { api } from "@/shared/config/database";
 import { apiClient } from "@/shared/api/serverClient";
@@ -768,6 +769,14 @@ export default function AuditTasks() {
                           {exportingTaskId === task.id ? '加载中...' : '导出报告'}
                         </Button>
                       )}
+                      {task.runtime_session_id && (
+                        <Link to={`/audit-sessions/${task.runtime_session_id}`}>
+                          <Button size="sm" className="cyber-btn-outline h-9">
+                            <MessagesSquare className="w-4 h-4 mr-2" />
+                            会话入口
+                          </Button>
+                        </Link>
+                      )}
                       {/* 任务详情按钮 */}
                       <Link to={`/agent-audit/${task.id}`}>
                         <Button size="sm" className="cyber-btn-outline h-9">
@@ -983,3 +992,7 @@ export default function AuditTasks() {
     </div>
   );
 }
+
+
+
+

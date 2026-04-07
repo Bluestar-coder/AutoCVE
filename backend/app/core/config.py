@@ -87,6 +87,7 @@ class Settings(BaseSettings):
     AGENT_MAX_ITERATIONS: int = 50
     AGENT_TOKEN_BUDGET: int = 100000
     AGENT_TIMEOUT_SECONDS: int = 1800
+    FINDING_RUNTIME_STACK_DEFAULT: str = "legacy"
 
     SANDBOX_IMAGE: str = "auditai-sandbox:latest"
     SANDBOX_MEMORY_LIMIT: str = "512m"

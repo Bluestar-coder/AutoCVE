@@ -4,7 +4,7 @@ from unittest.mock import MagicMock
 
 from app.services.agent.agents.analysis import AnalysisAgent
 from app.services.agent.agents.base import AgentConfig, AgentPattern, AgentResult, AgentType
-from app.services.agent.agents.recon import ReconAgent
+from app.services.agent.agents.recon import RECON_OUTPUT_CONTRACT, RECON_SYSTEM_PROMPT, ReconAgent
 
 
 class TestReconAgent:
@@ -45,7 +45,20 @@ class TestReconAgent:
         assert "project_profile" in result
         assert "priority_paths" in result
         assert "audit_targets" in result
+        assert "recommended_scanners" in result
         assert "tech_stack" not in result
+
+    def test_recon_prompt_and_contract_only_advertise_canonical_schema(self):
+        joined = f"{RECON_SYSTEM_PROMPT}\n{RECON_OUTPUT_CONTRACT}"
+
+        assert "project_profile" in joined
+        assert "priority_paths" in joined
+        assert "audit_targets" in joined
+        assert "recommended_scanners" in joined
+        assert "tech_stack" not in joined
+        assert "recommended_tools" not in joined
+        assert "high_risk_areas" not in joined
+        assert "initial_findings" not in joined
 
 
 class TestAnalysisAgent:

@@ -5,7 +5,7 @@
  */
 
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
-import { useParams } from "react-router-dom";
+import { useNavigate, useParams } from "react-router-dom";
 import { Terminal, Bot, Loader2, Radio, Filter, Maximize2, ArrowDown } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { toast } from "sonner";
@@ -19,6 +19,11 @@ import {
   getAgentEvents,
   AgentEvent,
 } from "@/shared/api/agentTasks";
+import {
+  getAuditSessionHandoffs,
+  getAuditSessionMessages,
+} from "@/shared/api/auditSessions";
+import type { AuditSessionHandoff, AuditSessionMessage } from "@/pages/AuditSession/types";
 import CreateAgentTaskDialog from "@/components/agent/CreateAgentTaskDialog";
 
 // Local imports
@@ -56,7 +61,99 @@ function formatHistoricalLogTime(timestamp?: string | null): string {
   });
 }
 
+function buildRuntimeSessionLogs(messages: AuditSessionMessage[], handoffs: AuditSessionHandoff[]): LogItem[] {
+  const logs: LogItem[] = [];
+
+  const pushLog = (id: string, timestamp: string, item: Omit<LogItem, 'id' | 'time'>) => {
+    const created = createLogItem(item);
+    logs.push({
+      ...created,
+      id,
+      time: formatHistoricalLogTime(timestamp),
+    });
+  };
+
+  messages.forEach((message) => {
+    const metadata = (message.metadata || {}) as Record<string, unknown>;
+    const payload = (message.payload || {}) as Record<string, unknown>;
+    const toolName = String(message.name || payload.tool_name || 'unknown');
+    const content = message.content || '';
+
+    if (message.role === 'user' && metadata.kind === 'finalization_prompt') {
+      return;
+    }
+
+    if (message.role === 'tool_use') {
+      pushLog(`runtime-msg-${message.id}`, message.created_at, {
+        type: 'tool',
+        title: `Tool: ${toolName}`,
+        content: payload.input ? `Input:\n${JSON.stringify(payload.input, null, 2)}` : undefined,
+        tool: { name: toolName, status: 'running' },
+        agentName: 'Finding',
+      });
+      return;
+    }
+
+    if (message.role === 'tool_result') {
+      pushLog(`runtime-msg-${message.id}`, message.created_at, {
+        type: 'tool',
+        title: `Completed: ${toolName}`,
+        content: content ? `Output:\n${truncateOutput(content)}` : undefined,
+        tool: {
+          name: toolName,
+          duration: Number(metadata.duration_ms || 0),
+          status: metadata.is_error ? 'failed' : 'completed',
+        },
+        agentName: 'Finding',
+      });
+      return;
+    }
+
+    if (message.role === 'assistant') {
+      const trimmed = content.trim();
+      const isThoughtLike = trimmed.startsWith('Thought:') || trimmed.includes('\nThought:') || trimmed.includes('Tool Call:');
+      const isFinalAnswer = /^Final Answer:/i.test(trimmed) || /"findings"\s*:/.test(trimmed);
+      pushLog(`runtime-msg-${message.id}`, message.created_at, {
+        type: isThoughtLike ? 'thinking' : 'info',
+        title: isFinalAnswer ? 'Final Answer' : (trimmed.slice(0, 100) + (trimmed.length > 100 ? '...' : '') || 'Assistant'),
+        content: isThoughtLike ? cleanThinkingContent(trimmed) : truncateOutput(trimmed),
+        agentName: 'Finding',
+      });
+      return;
+    }
+
+    if (message.role === 'user') {
+      pushLog(`runtime-msg-${message.id}`, message.created_at, {
+        type: 'user',
+        title: message.name === 'runtime_finalizer' ? 'Runtime finalizer' : 'User prompt',
+        content: truncateOutput(content),
+        agentName: 'Finding',
+      });
+      return;
+    }
+
+    pushLog(`runtime-msg-${message.id}`, message.created_at, {
+      type: 'info',
+      title: `${message.role}`,
+      content: truncateOutput(content),
+      agentName: 'Finding',
+    });
+  });
+
+  handoffs.forEach((handoff) => {
+    pushLog(`runtime-handoff-${handoff.id}`, handoff.created_at, {
+      type: 'dispatch',
+      title: `Handoff to ${handoff.target} (${handoff.status})`,
+      content: truncateOutput(JSON.stringify(handoff.payload, null, 2)),
+      agentName: 'Finding',
+    });
+  });
+
+  return logs.sort((a, b) => a.time.localeCompare(b.time) || a.id.localeCompare(b.id));
+}
+
 function AgentAuditPageContent() {
+  const navigate = useNavigate();
   const { taskId } = useParams<{ taskId: string }>();
   const {
     task, findings, agentTree, logs, selectedAgentId, showAllLogs,
@@ -82,30 +179,30 @@ function AgentAuditPageContent() {
   const previousTaskIdRef = useRef<string | undefined>(undefined);
   const disconnectStreamRef = useRef<(() => void) | null>(null);
   const lastEventSequenceRef = useRef<number>(0);
-  const hasConnectedRef = useRef<boolean>(false); // 🔥 追踪是否已连接 SSE
-  const hasLoadedHistoricalEventsRef = useRef<boolean>(false); // 🔥 追踪是否已加载历史事件
-  // 🔥 使用 state 来标记历史事件加载状态和触发 streamOptions 重新计算
+  const hasConnectedRef = useRef<boolean>(false); // 馃敟 杩借釜鏄惁宸茶繛鎺?SSE
+  const hasLoadedHistoricalEventsRef = useRef<boolean>(false); // 馃敟 杩借釜鏄惁宸插姞杞藉巻鍙蹭簨浠?
+  // 馃敟 浣跨敤 state 鏉ユ爣璁板巻鍙蹭簨浠跺姞杞界姸鎬佸拰瑙﹀彂 streamOptions 閲嶆柊璁＄畻
   const [afterSequence, setAfterSequence] = useState<number>(0);
   const [historicalEventsLoaded, setHistoricalEventsLoaded] = useState<boolean>(false);
 
-  // 🔥 当 taskId 变化时立即重置状态（新建任务时清理旧日志）
+  // 馃敟 褰?taskId 鍙樺寲鏃剁珛鍗抽噸缃姸鎬侊紙鏂板缓浠诲姟鏃舵竻鐞嗘棫鏃ュ織锛?
   useEffect(() => {
-    // 如果 taskId 发生变化，立即重置
+    // 濡傛灉 taskId 鍙戠敓鍙樺寲锛岀珛鍗抽噸缃?
     if (taskId !== previousTaskIdRef.current) {
-      // 1. 先断开旧的 SSE 流连接
+      // 1. 鍏堟柇寮€鏃х殑 SSE 娴佽繛鎺?
       if (disconnectStreamRef.current) {
         disconnectStreamRef.current();
         disconnectStreamRef.current = null;
       }
-      // 2. 重置所有状态
+      // 2. 閲嶇疆鎵€鏈夌姸鎬?
       reset();
       setShowSplash(!taskId);
-      // 3. 重置事件序列号和加载状态
+      // 3. 閲嶇疆浜嬩欢搴忓垪鍙峰拰鍔犺浇鐘舵€?
       lastEventSequenceRef.current = 0;
-      hasConnectedRef.current = false; // 🔥 重置 SSE 连接标志
-      hasLoadedHistoricalEventsRef.current = false; // 🔥 重置历史事件加载标志
-      setHistoricalEventsLoaded(false); // 🔥 重置历史事件加载状态
-      setAfterSequence(0); // 🔥 重置 afterSequence state
+      hasConnectedRef.current = false; // 馃敟 閲嶇疆 SSE 杩炴帴鏍囧織
+      hasLoadedHistoricalEventsRef.current = false; // 馃敟 閲嶇疆鍘嗗彶浜嬩欢鍔犺浇鏍囧織
+      setHistoricalEventsLoaded(false); // 馃敟 閲嶇疆鍘嗗彶浜嬩欢鍔犺浇鐘舵€?
+      setAfterSequence(0); // 馃敟 閲嶇疆 afterSequence state
     }
     previousTaskIdRef.current = taskId;
   }, [taskId, reset]);
@@ -113,12 +210,14 @@ function AgentAuditPageContent() {
   // ============ Data Loading ============
 
   const loadTask = useCallback(async () => {
-    if (!taskId) return;
+    if (!taskId) return null;
     try {
       const data = await getAgentTask(taskId);
       setTask(data);
+      return data;
     } catch {
       toast.error("Failed to load task");
+      return null;
     }
   }, [taskId, setTask]);
 
@@ -164,12 +263,43 @@ function AgentAuditPageContent() {
     }
   }, [loadAgentTree]);
 
-  // 🔥 NEW: 加载历史事件并转换为日志项
+  const loadRuntimeSessionSnapshot = useCallback(async (runtimeSessionId?: string | null): Promise<LogItem[]> => {
+    if (!runtimeSessionId) {
+      return [];
+    }
+    try {
+      const [messages, handoffs] = await Promise.all([
+        getAuditSessionMessages(runtimeSessionId),
+        getAuditSessionHandoffs(runtimeSessionId),
+      ]);
+      return buildRuntimeSessionLogs(messages, handoffs);
+    } catch (error) {
+      console.error('[AgentAudit] Failed to load runtime session trace:', error);
+      return [];
+    }
+  }, []);
+  const mergeRuntimeSessionLogs = useCallback(async (runtimeSessionId?: string | null) => {
+    if (!runtimeSessionId) {
+      return 0;
+    }
+    const runtimeLogs = await loadRuntimeSessionSnapshot(runtimeSessionId);
+    if (runtimeLogs.length === 0) {
+      return 0;
+    }
+    const merged = new Map<string, LogItem>();
+    logs.forEach((log) => merged.set(log.id, log));
+    runtimeLogs.forEach((log) => merged.set(log.id, log));
+    const payload = Array.from(merged.values()).sort((a, b) => a.time.localeCompare(b.time) || a.id.localeCompare(b.id));
+    dispatch({ type: 'SET_LOGS', payload });
+    return payload.length;
+  }, [dispatch, loadRuntimeSessionSnapshot, logs]);
+
+  // 馃敟 NEW: 鍔犺浇鍘嗗彶浜嬩欢骞惰浆鎹负鏃ュ織椤?
   const loadHistoricalEvents = useCallback(async (options?: { forceReload?: boolean }) => {
     if (!taskId) return 0;
     const forceReload = options?.forceReload === true;
 
-    // 🔥 防止重复加载历史事件
+    // 馃敟 闃叉閲嶅鍔犺浇鍘嗗彶浜嬩欢
     if (forceReload) {
       hasLoadedHistoricalEventsRef.current = false;
       lastEventSequenceRef.current = 0;
@@ -200,25 +330,25 @@ function AgentAuditPageContent() {
         return 0;
       }
 
-      // 按 sequence 排序确保顺序正确
+      // 鎸?sequence 鎺掑簭纭繚椤哄簭姝ｇ‘
       events.sort((a, b) => a.sequence - b.sequence);
 
-      // 转换事件为日志项
+      // 杞崲浜嬩欢涓烘棩蹇楅」
       let processedCount = 0;
       events.forEach((event: AgentEvent) => {
-        // 更新最后的事件序列号
+        // 鏇存柊鏈€鍚庣殑浜嬩欢搴忓垪鍙?
         if (event.sequence > lastEventSequenceRef.current) {
           lastEventSequenceRef.current = event.sequence;
         }
 
-        // 提取 agent_name
+        // 鎻愬彇 agent_name
         const agentName = (event.metadata?.agent_name as string) ||
           (event.metadata?.agent as string) ||
           undefined;
 
-        // 根据事件类型创建日志项
+        // 鏍规嵁浜嬩欢绫诲瀷鍒涘缓鏃ュ織椤?
         switch (event.event_type) {
-          // LLM 思考相关
+          // LLM 鎬濊€冪浉鍏?
           case 'thinking':
           case 'llm_thought':
           case 'llm_start':
@@ -265,7 +395,7 @@ function AgentAuditPageContent() {
             processedCount++;
             break;
 
-          // 工具调用相关
+          // 宸ュ叿璋冪敤鐩稿叧
           case 'tool_call':
             dispatch({
               type: 'ADD_LOG',
@@ -303,7 +433,7 @@ function AgentAuditPageContent() {
             processedCount++;
             break;
 
-          // 发现漏洞 - 🔥 包含所有 finding 相关事件类型
+          // 鍙戠幇婕忔礊 - 馃敟 鍖呭惈鎵€鏈?finding 鐩稿叧浜嬩欢绫诲瀷
           case 'finding':
           case 'finding_new':
           case 'finding_verified':
@@ -319,7 +449,7 @@ function AgentAuditPageContent() {
             processedCount++;
             break;
 
-          // 调度和阶段相关
+          // 璋冨害鍜岄樁娈电浉鍏?
           case 'dispatch':
           case 'dispatch_complete':
           case 'phase_start':
@@ -337,7 +467,7 @@ function AgentAuditPageContent() {
             processedCount++;
             break;
 
-          // 任务完成
+          // 浠诲姟瀹屾垚
           case 'task_complete':
             dispatch({
               type: 'ADD_LOG',
@@ -350,7 +480,7 @@ function AgentAuditPageContent() {
             processedCount++;
             break;
 
-          // 任务错误
+          // 浠诲姟閿欒
           case 'task_error':
             dispatch({
               type: 'ADD_LOG',
@@ -363,7 +493,7 @@ function AgentAuditPageContent() {
             processedCount++;
             break;
 
-          // 任务取消
+          // 浠诲姟鍙栨秷
           case 'task_cancel':
             dispatch({
               type: 'ADD_LOG',
@@ -376,92 +506,30 @@ function AgentAuditPageContent() {
             processedCount++;
             break;
 
-          // 进度事件
+          // 杩涘害浜嬩欢
           case 'progress':
-            // 进度事件使用 UPDATE_OR_ADD_PROGRESS_LOG 来更新而不是添加
             if (event.message) {
-              const progressPatterns: { pattern: RegExp; key: string }[] = [
-                { pattern: /索引进度[:：]?\s*\d+\/\d+/, key: 'index_progress' },
-                { pattern: /嵌入进度[:：]?\s*\d+\/\d+/, key: 'embed_progress' },
-                { pattern: /克隆进度[:：]?\s*\d+%/, key: 'clone_progress' },
-                { pattern: /下载进度[:：]?\s*\d+%/, key: 'download_progress' },
-                { pattern: /上传进度[:：]?\s*\d+%/, key: 'upload_progress' },
-                { pattern: /扫描进度[:：]?\s*\d+/, key: 'scan_progress' },
-                { pattern: /分析进度[:：]?\s*\d+/, key: 'analyze_progress' },
-              ];
-              const matchedProgress = progressPatterns.find(p => p.pattern.test(event.message || ''));
-              if (matchedProgress) {
-                dispatch({
-                  type: 'UPDATE_OR_ADD_PROGRESS_LOG',
-                  payload: {
-                    progressKey: matchedProgress.key,
-                    title: event.message,
-                    agentName,
-                  }
-                });
-              } else {
-                dispatch({
-                  type: 'ADD_LOG',
-                  payload: {
-                    type: 'info',
-                    title: event.message,
-                    agentName,
-                  }
-                });
-              }
+              dispatch({
+                type: 'UPDATE_OR_ADD_PROGRESS_LOG',
+                payload: {
+                  progressKey: `${agentName || 'task'}_progress`,
+                  title: event.message,
+                  agentName,
+                }
+              });
               processedCount++;
             }
             break;
 
-          // 信息和错误
-          case 'info':
-          case 'complete':
-          case 'error':
-          case 'warning': {
-            const message = event.message || `${event.event_type}`;
-            // 检测进度类型消息
-            const progressPatterns: { pattern: RegExp; key: string }[] = [
-              { pattern: /索引进度[:：]?\s*\d+\/\d+/, key: 'index_progress' },
-              { pattern: /嵌入进度[:：]?\s*\d+\/\d+/, key: 'embed_progress' },
-              { pattern: /克隆进度[:：]?\s*\d+%/, key: 'clone_progress' },
-              { pattern: /下载进度[:：]?\s*\d+%/, key: 'download_progress' },
-              { pattern: /上传进度[:：]?\s*\d+%/, key: 'upload_progress' },
-              { pattern: /扫描进度[:：]?\s*\d+/, key: 'scan_progress' },
-              { pattern: /分析进度[:：]?\s*\d+/, key: 'analyze_progress' },
-            ];
-            const matchedProgress = progressPatterns.find(p => p.pattern.test(message));
-            if (matchedProgress) {
-              dispatch({
-                type: 'UPDATE_OR_ADD_PROGRESS_LOG',
-                payload: {
-                  progressKey: matchedProgress.key,
-                  title: message,
-                  agentName,
-                }
-              });
-            } else {
-              dispatch({
-                type: 'ADD_LOG',
-                payload: {
-                  type: event.event_type === 'error' ? 'error' : 'info',
-                  title: message,
-                  agentName,
-                }
-              });
-            }
-            processedCount++;
-            break;
-          }
-
-          // 跳过 thinking_token 等高频事件（它们不会被保存到数据库）
+          // 璺宠繃 thinking_token 绛夐珮棰戜簨浠讹紙瀹冧滑涓嶄細琚繚瀛樺埌鏁版嵁搴擄級
           case 'thinking_token':
           case 'thinking_start':
           case 'thinking_end':
-            // 这些事件是流式传输用的，不保存到数据库
+            // 杩欎簺浜嬩欢鏄祦寮忎紶杈撶敤鐨勶紝涓嶄繚瀛樺埌鏁版嵁搴?
             break;
 
           default:
-            // 其他事件类型也显示为 info（如果有消息）
+            // 鍏朵粬浜嬩欢绫诲瀷涔熸樉绀轰负 info锛堝鏋滄湁娑堟伅锛?
             if (event.message) {
               dispatch({
                 type: 'ADD_LOG',
@@ -477,7 +545,7 @@ function AgentAuditPageContent() {
       });
 
       console.log(`[AgentAudit] Processed ${processedCount} events into logs, last sequence: ${lastEventSequenceRef.current}`);
-      // 🔥 更新 afterSequence state，触发 streamOptions 重新计算
+      // 馃敟 鏇存柊 afterSequence state锛岃Е鍙?streamOptions 閲嶆柊璁＄畻
       setAfterSequence(lastEventSequenceRef.current);
       return events.length;
     } catch (err) {
@@ -485,10 +553,10 @@ function AgentAuditPageContent() {
       hasLoadedHistoricalEventsRef.current = false;
       return 0;
     }
-  }, [taskId, dispatch, setAfterSequence]);
+  }, [taskId, dispatch, setAfterSequence, loadRuntimeSessionSnapshot]);
 
   /*
-  const loadHistoricalEventsSnapshot = useCallback(async () => {
+  const loadHistoricalEventsSnapshot = useCallback(async (runtimeSessionId?: string | null) => {
     if (!taskId) return 0;
 
     try {
@@ -514,13 +582,13 @@ function AgentAuditPageContent() {
       const snapshotLogs: LogItem[] = [];
       const progressIndex = new Map<string, number>();
       const progressPatterns: { pattern: RegExp; key: string }[] = [
-        { pattern: /绱㈠紩杩涘害[:锛歖?\s*\d+\/\d+/, key: 'index_progress' },
-        { pattern: /宓屽叆杩涘害[:锛歖?\s*\d+\/\d+/, key: 'embed_progress' },
-        { pattern: /鍏嬮殕杩涘害[:锛歖?\s*\d+%/, key: 'clone_progress' },
-        { pattern: /涓嬭浇杩涘害[:锛歖?\s*\d+%/, key: 'download_progress' },
-        { pattern: /涓婁紶杩涘害[:锛歖?\s*\d+%/, key: 'upload_progress' },
-        { pattern: /鎵弿杩涘害[:锛歖?\s*\d+/, key: 'scan_progress' },
-        { pattern: /鍒嗘瀽杩涘害[:锛歖?\s*\d+/, key: 'analyze_progress' },
+        { pattern: /缁便垹绱╂潻娑樺[:閿涙瓥?\s*\d+\/\d+/, key: 'index_progress' },
+        { pattern: /瀹撳苯鍙嗘潻娑樺[:閿涙瓥?\s*\d+\/\d+/, key: 'embed_progress' },
+        { pattern: /閸忓娈曟潻娑樺[:閿涙瓥?\s*\d+%/, key: 'clone_progress' },
+        { pattern: /娑撳娴囨潻娑樺[:閿涙瓥?\s*\d+%/, key: 'download_progress' },
+        { pattern: /娑撳﹣绱舵潻娑樺[:閿涙瓥?\s*\d+%/, key: 'upload_progress' },
+        { pattern: /閹殿偅寮挎潻娑樺[:閿涙瓥?\s*\d+/, key: 'scan_progress' },
+        { pattern: /閸掑棙鐎芥潻娑樺[:閿涙瓥?\s*\d+/, key: 'analyze_progress' },
       ];
 
       for (const event of events) {
@@ -676,10 +744,10 @@ function AgentAuditPageContent() {
       console.error('[AgentAudit] Snapshot reload failed:', error);
       return 0;
     }
-  }, [taskId, dispatch, setAfterSequence]);
+  }, [taskId, dispatch, setAfterSequence, loadRuntimeSessionSnapshot]);
   */
 
-  const loadHistoricalEventsSnapshot = useCallback(async () => {
+  const loadHistoricalEventsSnapshot = useCallback(async (runtimeSessionId?: string | null) => {
     if (!taskId) return 0;
 
     try {
@@ -699,7 +767,9 @@ function AgentAuditPageContent() {
         if (page.length < 500) break;
       }
 
-      if (events.length === 0) {
+      const runtimeLogs = await loadRuntimeSessionSnapshot(runtimeSessionId);
+
+      if (events.length === 0 && runtimeLogs.length === 0) {
         console.log('[AgentAudit] Snapshot found no historical events');
         setAfterSequence(0);
         return 0;
@@ -860,26 +930,27 @@ function AgentAuditPageContent() {
         }
       }
 
-      dispatch({ type: 'SET_LOGS', payload: snapshotLogs });
+      const mergedLogs = [...snapshotLogs, ...runtimeLogs].sort((a, b) => a.time.localeCompare(b.time) || a.id.localeCompare(b.id));
+      dispatch({ type: 'SET_LOGS', payload: mergedLogs });
       hasLoadedHistoricalEventsRef.current = true;
       setHistoricalEventsLoaded(true);
       setAfterSequence(lastEventSequenceRef.current);
-      console.log(`[AgentAudit] Snapshot loaded ${snapshotLogs.length} logs from ${events.length} events`);
-      return snapshotLogs.length;
+      console.log(`[AgentAudit] Snapshot loaded ${mergedLogs.length} logs from ${events.length} events and ${runtimeLogs.length} runtime logs`);
+      return mergedLogs.length;
     } catch (error) {
       console.error('[AgentAudit] Snapshot reload failed:', error);
       hasLoadedHistoricalEventsRef.current = false;
       setHistoricalEventsLoaded(false);
       return 0;
     }
-  }, [taskId, dispatch, setAfterSequence]);
+  }, [taskId, dispatch, setAfterSequence, loadRuntimeSessionSnapshot]);
 
   // ============ Stream Event Handling ============
 
   const streamOptions = useMemo(() => ({
     includeThinking: true,
     includeToolCalls: true,
-    // 🔥 使用 state 变量，确保在历史事件加载后能获取最新值
+    // 馃敟 浣跨敤 state 鍙橀噺锛岀‘淇濆湪鍘嗗彶浜嬩欢鍔犺浇鍚庤兘鑾峰彇鏈€鏂板€?
     afterSequence: afterSequence,
     onEvent: (event: { type: string; message?: string; metadata?: { agent_name?: string; agent?: string } }) => {
       if (event.metadata?.agent_name) {
@@ -888,7 +959,7 @@ function AgentAuditPageContent() {
 
       const dispatchEvents = ['dispatch', 'dispatch_complete', 'node_start', 'phase_start', 'phase_complete'];
       if (dispatchEvents.includes(event.type)) {
-        // 所有 dispatch 类型事件都添加到日志
+        // 鎵€鏈?dispatch 绫诲瀷浜嬩欢閮芥坊鍔犲埌鏃ュ織
         dispatch({
           type: 'ADD_LOG',
           payload: {
@@ -915,41 +986,34 @@ function AgentAuditPageContent() {
         return;
       }
 
-      // 🔥 处理 info、warning、error 类型事件（克隆进度、索引进度等）
+      // 馃敟 澶勭悊 info銆亀arning銆乪rror 绫诲瀷浜嬩欢锛堝厠闅嗚繘搴︺€佺储寮曡繘搴︾瓑锛?
       const infoEvents = ['info', 'warning', 'error', 'progress'];
       if (infoEvents.includes(event.type)) {
         const message = event.message || event.type;
 
-        // 🔥 检测进度类型消息，使用更新而不是添加
-        const progressPatterns: { pattern: RegExp; key: string }[] = [
-          { pattern: /索引进度[:：]?\s*\d+\/\d+/, key: 'index_progress' },
-          { pattern: /嵌入进度[:：]?\s*\d+\/\d+/, key: 'embed_progress' },
-          { pattern: /克隆进度[:：]?\s*\d+%/, key: 'clone_progress' },
-          { pattern: /下载进度[:：]?\s*\d+%/, key: 'download_progress' },
-          { pattern: /上传进度[:：]?\s*\d+%/, key: 'upload_progress' },
-          { pattern: /扫描进度[:：]?\s*\d+/, key: 'scan_progress' },
-          { pattern: /分析进度[:：]?\s*\d+/, key: 'analyze_progress' },
-        ];
+        // 馃敟 妫€娴嬭繘搴︾被鍨嬫秷鎭紝浣跨敤鏇存柊鑰屼笉鏄坊鍔?
+        const lowerMessage = message.toLowerCase();
+        const looksLikeProgress =
+          event.type === 'progress' ||
+          lowerMessage.includes('progress') ||
+          /(?:\d+\s*\/\s*\d+|\d+\s*%)/.test(message);
 
-        const matchedProgress = progressPatterns.find(p => p.pattern.test(message));
-
-        if (matchedProgress) {
-          // 使用 UPDATE_OR_ADD_PROGRESS_LOG 来更新进度而不是添加新日志
+        if (looksLikeProgress) {
           dispatch({
             type: 'UPDATE_OR_ADD_PROGRESS_LOG',
             payload: {
-              progressKey: matchedProgress.key,
+              progressKey: `${getCurrentAgentName() || 'task'}_${event.type}`,
               title: message,
               agentName: getCurrentAgentName() || undefined,
             }
           });
         } else {
-          // 非进度消息正常添加
           dispatch({
             type: 'ADD_LOG',
             payload: {
               type: event.type === 'error' ? 'error' : 'info',
               title: message,
+              content: message,
               agentName: getCurrentAgentName() || undefined,
             }
           });
@@ -971,7 +1035,7 @@ function AgentAuditPageContent() {
 
       const currentId = getCurrentThinkingId();
       if (!currentId) {
-        // 预生成 ID，这样我们可以跟踪这个日志
+        // 棰勭敓鎴?ID锛岃繖鏍锋垜浠彲浠ヨ窡韪繖涓棩蹇?
         const newLogId = `thinking-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
         dispatch({
           type: 'ADD_LOG', payload: {
@@ -1047,7 +1111,7 @@ function AgentAuditPageContent() {
           agentName: getCurrentAgentName() || undefined,
         }
       });
-      // 🔥 直接将 finding 添加到状态，不依赖 API（因为运行时数据库还没有数据）
+      // 馃敟 鐩存帴灏?finding 娣诲姞鍒扮姸鎬侊紝涓嶄緷璧?API锛堝洜涓鸿繍琛屾椂鏁版嵁搴撹繕娌℃湁鏁版嵁锛?
       dispatch({
         type: 'ADD_FINDING',
         payload: {
@@ -1077,7 +1141,7 @@ function AgentAuditPageContent() {
 
   const { connect: connectStream, disconnect: disconnectStream, isConnected } = useAgentStream(taskId || null, streamOptions);
 
-  // 保存 disconnect 函数到 ref，以便在 taskId 变化时使用
+  // 淇濆瓨 disconnect 鍑芥暟鍒?ref锛屼互渚垮湪 taskId 鍙樺寲鏃朵娇鐢?
   useEffect(() => {
     disconnectStreamRef.current = disconnectStream;
   }, [disconnectStream]);
@@ -1097,7 +1161,7 @@ function AgentAuditPageContent() {
     };
   }, [isRunning]);
 
-  // Initial load - 🔥 加载任务数据和历史事件
+  // Initial load - 馃敟 鍔犺浇浠诲姟鏁版嵁鍜屽巻鍙蹭簨浠?
   useEffect(() => {
     if (!taskId) {
       setShowSplash(true);
@@ -1109,18 +1173,17 @@ function AgentAuditPageContent() {
 
     const loadAllData = async () => {
       try {
-        // 先加载任务基本信息
+        // 鍏堝姞杞戒换鍔″熀鏈俊鎭?
         await Promise.allSettled([loadTask(), loadFindings(), loadAgentTree()]);
-
-        // 🔥 加载历史事件 - 无论任务是否运行都需要加载
-        const eventsLoaded = await loadHistoricalEventsSnapshot();
+        const loadedTask = await loadTask();
+        const eventsLoaded = await loadHistoricalEventsSnapshot(loadedTask?.runtime_session_id ?? null);
         console.log(`[AgentAudit] Loaded ${eventsLoaded} historical events for task ${taskId}`);
 
-        // 标记历史事件已加载完成 (setAfterSequence 已在 loadHistoricalEvents 中调用)
+        // 鏍囪鍘嗗彶浜嬩欢宸插姞杞藉畬鎴?(setAfterSequence 宸插湪 loadHistoricalEvents 涓皟鐢?
         setHistoricalEventsLoaded(true);
       } catch (error) {
         console.error('[AgentAudit] Failed to load data:', error);
-        setHistoricalEventsLoaded(true); // 即使出错也标记为完成，避免无限等待
+        setHistoricalEventsLoaded(true); // 鍗充娇鍑洪敊涔熸爣璁颁负瀹屾垚锛岄伩鍏嶆棤闄愮瓑寰?
       } finally {
         setLoading(false);
       }
@@ -1134,22 +1197,22 @@ function AgentAuditPageContent() {
     if (logs.length > 0) return;
     if (hasLoadedHistoricalEventsRef.current && lastEventSequenceRef.current > 0) return;
 
-    loadHistoricalEventsSnapshot().then((eventsLoaded) => {
+    loadHistoricalEventsSnapshot(task?.runtime_session_id ?? null).then((eventsLoaded) => {
       if (eventsLoaded > 0) {
         setHistoricalEventsLoaded(true);
       }
     });
-  }, [taskId, isRunning, isLoading, logs.length, loadHistoricalEventsSnapshot]);
+  }, [taskId, isRunning, isLoading, logs.length, task?.runtime_session_id, loadHistoricalEventsSnapshot]);
 
-  // Stream connection - 🔥 在历史事件加载完成后连接
+  // Stream connection - 馃敟 鍦ㄥ巻鍙蹭簨浠跺姞杞藉畬鎴愬悗杩炴帴
   useEffect(() => {
-    // 等待历史事件加载完成，且任务正在运行
+    // 绛夊緟鍘嗗彶浜嬩欢鍔犺浇瀹屾垚锛屼笖浠诲姟姝ｅ湪杩愯
     if (!taskId || !task?.status || task.status !== 'running') return;
 
-    // 🔥 使用 state 变量确保在历史事件加载完成后才连接
+    // 馃敟 浣跨敤 state 鍙橀噺纭繚鍦ㄥ巻鍙蹭簨浠跺姞杞藉畬鎴愬悗鎵嶈繛鎺?
     if (!historicalEventsLoaded) return;
 
-    // 🔥 避免重复连接 - 只连接一次
+    // 馃敟 閬垮厤閲嶅杩炴帴 - 鍙繛鎺ヤ竴娆?
     if (hasConnectedRef.current) return;
 
     hasConnectedRef.current = true;
@@ -1161,11 +1224,20 @@ function AgentAuditPageContent() {
       console.log('[AgentAudit] Cleanup: disconnecting stream');
       disconnectStream();
     };
-    // 🔥 CRITICAL FIX: 移除 afterSequence 依赖！
-    // afterSequence 通过 streamOptions 传递，不需要在这里触发重连
-    // 如果包含它，当 loadHistoricalEvents 更新 afterSequence 时会触发断开重连
+    // 馃敟 CRITICAL FIX: 绉婚櫎 afterSequence 渚濊禆锛?
+    // afterSequence 閫氳繃 streamOptions 浼犻€掞紝涓嶉渶瑕佸湪杩欓噷瑙﹀彂閲嶈繛
+    // 濡傛灉鍖呭惈瀹冿紝褰?loadHistoricalEvents 鏇存柊 afterSequence 鏃朵細瑙﹀彂鏂紑閲嶈繛
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [taskId, task?.status, historicalEventsLoaded, connectStream, disconnectStream, dispatch]);
+
+  useEffect(() => {
+    if (!taskId || task?.status !== 'running' || !task?.runtime_session_id) return;
+    void mergeRuntimeSessionLogs(task.runtime_session_id);
+    const interval = setInterval(() => {
+      void mergeRuntimeSessionLogs(task.runtime_session_id);
+    }, 5000);
+    return () => clearInterval(interval);
+  }, [taskId, task?.status, task?.runtime_session_id, mergeRuntimeSessionLogs]);
 
   // Polling
   useEffect(() => {
@@ -1243,7 +1315,7 @@ function AgentAuditPageContent() {
         <div className="absolute inset-0 vignette pointer-events-none" />
         <div className="flex items-center gap-3 text-muted-foreground relative z-10">
           <Loader2 className="w-5 h-5 animate-spin text-primary" />
-          <span className="text-sm text-slate-500">正在准备审计任务工作区...</span>
+          <span className="text-sm text-slate-500">姝ｅ湪鍑嗗瀹¤浠诲姟宸ヤ綔鍖?..</span>
         </div>
       </div>
     );
@@ -1259,6 +1331,7 @@ function AgentAuditPageContent() {
         task={task}
         isRunning={isRunning}
         isCancelling={isCancelling}
+        sessionHref={task?.runtime_session_id ? `/audit-sessions/${task.runtime_session_id}` : null}
         onCancel={handleCancel}
         onExport={handleExportReport}
         onNewAudit={() => setShowCreateDialog(true)}
@@ -1439,7 +1512,7 @@ function AgentAuditPageContent() {
             {/* Tree content or Agent Detail */}
             <div className="flex-1 overflow-y-auto p-3 custom-scrollbar bg-[linear-gradient(180deg,rgba(255,255,255,0.58),rgba(244,237,228,0.68))]">
               {selectedAgentId && !showAllLogs ? (
-                /* Agent Detail Panel - 覆盖整个内容区域 */
+                /* Agent Detail Panel - 瑕嗙洊鏁翠釜鍐呭鍖哄煙 */
                 <AgentDetailPanel
                   agentId={selectedAgentId}
                   treeNodes={treeNodes}
@@ -1503,6 +1576,7 @@ function AgentAuditPageContent() {
 
 // Wrapped export with Error Boundary
 export default function AgentAuditPage() {
+  const navigate = useNavigate();
   const { taskId } = useParams<{ taskId: string }>();
 
   return (
@@ -1514,3 +1588,10 @@ export default function AgentAuditPage() {
     </AgentErrorBoundary>
   );
 }
+
+
+
+
+
+
+

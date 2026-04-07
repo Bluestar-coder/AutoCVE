@@ -50,7 +50,7 @@ class WorkerSession:
 
 
 class FindingController:
-    DEFAULT_VULN_FAMILIES = ["auth_bypass", "idor", "business_logic", "sql_injection", "ssrf", "path_traversal"]
+    DEFAULT_VULN_FAMILIES = ["auth_bypass", "idor", "business_logic", "sql_injection", "xss", "ssrf", "path_traversal", "command_injection", "deserialization", "ssti", "xxe", "other"]
 
     def __init__(
         self,
@@ -86,7 +86,6 @@ class FindingController:
         focus_vulnerabilities = self._ordered_unique(
             context.get("focus_vulnerabilities")
             or config.get("focus_vulnerabilities")
-            or config.get("target_vulnerabilities")
             or self.DEFAULT_VULN_FAMILIES
         )
         target_files = self._ordered_unique(context.get("target_files") or [])

@@ -18,7 +18,7 @@ ENV PIP_DEFAULT_TIMEOUT=120
 RUN rm -f /etc/apt/apt.conf.d/proxy.conf 2>/dev/null || true     && sed -i 's|deb.debian.org|mirrors.tuna.tsinghua.edu.cn|g' /etc/apt/sources.list.d/debian.sources     && echo 'Acquire::http::Proxy "false";' > /etc/apt/apt.conf.d/99-no-proxy     && echo 'Acquire::https::Proxy "false";' >> /etc/apt/apt.conf.d/99-no-proxy     && echo 'Acquire::Retries "5";' >> /etc/apt/apt.conf.d/99-no-proxy     && echo 'Acquire::http::Timeout "30";' >> /etc/apt/apt.conf.d/99-no-proxy     && echo 'Acquire::https::Timeout "30";' >> /etc/apt/apt.conf.d/99-no-proxy     && apt-get update     && apt-get install -y --no-install-recommends gcc libpq-dev libffi-dev python3-venv     && rm -rf /var/lib/apt/lists/*
 
 COPY pyproject.toml requirements-lock.txt README.md ./
-RUN python -m venv /app/.venv     && /app/.venv/bin/pip install --upgrade pip setuptools wheel     && /app/.venv/bin/pip install --retries 5 -r requirements-lock.txt
+RUN python -m venv /app/.venv     && /app/.venv/bin/pip install --upgrade pip setuptools wheel     && /app/.venv/bin/pip install --retries 5 -r requirements-lock.txt     && /app/.venv/bin/pip install --retries 5 "psycopg[binary]>=3.2.1"
 
 COPY . .
 RUN /app/.venv/bin/pip install --no-deps -e .
