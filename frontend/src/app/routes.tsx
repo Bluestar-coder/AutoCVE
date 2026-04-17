@@ -16,6 +16,7 @@ import RecycleBin from '@/pages/RecycleBin';
 import ReportTemplatesPage from '@/pages/ReportTemplatesPage';
 import SkillsManager from '@/pages/SkillsManager';
 import TaskDetail from '@/pages/TaskDetail';
+import VulnerabilityManagement from '@/pages/VulnerabilityManagement';
 
 export interface RouteConfig {
   name: string;
@@ -38,6 +39,7 @@ const routes: RouteConfig[] = [
   { name: '提示词管理', path: '/prompts', element: <PromptManager />, visible: true },
   { name: 'Skills管理', path: '/skills', element: <SkillsManager />, visible: true },
   { name: '报告模板', path: '/report-templates', element: <ReportTemplatesPage />, visible: true },
+  { name: '漏洞管理', path: '/vulnerabilities', element: <VulnerabilityManagement />, visible: true },
   { name: '流程调试', path: '/flow-debugger', element: <FlowDebugger />, visible: true },
   { name: '模型管理', path: '/admin', element: <AdminDashboard />, visible: true },
   { name: '回收站', path: '/recycle-bin', element: <RecycleBin />, visible: true },

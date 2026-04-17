@@ -14,6 +14,14 @@ from typing import Any, Dict, List, Optional, Tuple
 from ..core.message import AgentMessage, MessageType, message_bus
 from ..core.registry import agent_registry
 from ..core.state import AgentState
+from app.models.audit_session import AuditCheckpointType
+from app.services.runtime_core.permission_runtime import ToolPermissionDecision, resolve_permission_rule_decision
+from app.services.runtime_core.session_registry import runtime_session_registry
+from app.services.runtime_core.session_state import (
+    SessionRuntimeState,
+    build_legacy_agent_runtime_state,
+)
+from app.services.runtime_core.tool_runtime import match_runtime_event_hooks
 
 logger = logging.getLogger(__name__)
 
@@ -199,6 +207,7 @@ class BaseAgent(ABC):
         self._cancelled = False
         self._cancel_callback = None
         self._registered = False
+        self._runtime_session_checkpoint_store = None
         self._incoming_handoff: Optional[TaskHandoff] = None
         self._insights: List[str] = []
         self._work_completed: List[str] = []
@@ -253,6 +262,38 @@ class BaseAgent(ABC):
         except Exception:
             pass
         self._registered = True
+
+    def configure_runtime_session_persistence(self, *, task_id: str, checkpoint_store: Any) -> None:
+        self._state.metadata["task_id"] = str(task_id)
+        self._state.task_context["task_id"] = str(task_id)
+        self._runtime_session_checkpoint_store = checkpoint_store
+
+    async def restore_runtime_session_from_checkpoint(self) -> dict[str, Any] | None:
+        if self._runtime_session_checkpoint_store is None:
+            return None
+        task_id = str(self._state.metadata.get("task_id") or self._state.task_context.get("task_id") or "").strip()
+        if not task_id:
+            return None
+        restored = await self._runtime_session_checkpoint_store.restore_agent_runtime_session_checkpoint(
+            task_id=task_id,
+            agent_state=self._state,
+        )
+        if restored is not None and self._state.metadata.get("runtime_session_state"):
+            runtime_session_state = self._state.metadata.get("runtime_session_state") or {}
+            self._state.metadata["runtime_session_state"] = dict(runtime_session_state)
+            self._apply_runtime_memory_prompt_overlay()
+        return restored
+
+    async def _persist_runtime_session_checkpoint_if_needed(self) -> None:
+        if self._runtime_session_checkpoint_store is None:
+            return
+        task_id = str(self._state.metadata.get("task_id") or self._state.task_context.get("task_id") or "").strip()
+        if not task_id:
+            return
+        await self._runtime_session_checkpoint_store.persist_agent_runtime_session_checkpoint(
+            task_id=task_id,
+            agent_state=self._state,
+        )
 
     def set_parent_id(self, parent_id: str) -> None:
         self.parent_id = parent_id
@@ -556,6 +597,285 @@ class BaseAgent(ABC):
             await self.emit_thinking_end(accumulated)
         return accumulated, total_tokens
 
+    def _memory_runtime_metadata(self) -> Dict[str, Any]:
+        metadata = self._state.metadata.setdefault("memory_runtime", {})
+        metadata.setdefault("instructions", [])
+        metadata.setdefault("recalls", [])
+        metadata.setdefault("source", None)
+        return metadata
+
+    def _compose_runtime_memory_prompt(self) -> str:
+        from app.services.finding_runtime.models import RuntimeMemoryRecord
+        from app.services.runtime_core.memory_runtime import build_memory_message
+
+        memory_runtime = self._memory_runtime_metadata()
+        base_prompt = str(memory_runtime.get("base_system_prompt") or self.config.system_prompt or "").strip()
+        rendered: List[str] = []
+        for bucket in ("instructions", "recalls"):
+            for item in memory_runtime.get(bucket) or []:
+                if not isinstance(item, dict):
+                    continue
+                try:
+                    record = RuntimeMemoryRecord(**item)
+                except TypeError:
+                    continue
+                rendered.append(build_memory_message(record))
+        if not rendered:
+            return base_prompt
+        sections = [section for section in [base_prompt, "## Runtime Memory OS", *rendered] if section]
+        return "\n\n".join(sections)
+
+    def _apply_runtime_memory_prompt_overlay(self) -> None:
+        memory_runtime = self._state.metadata.get("memory_runtime") or {}
+        if not memory_runtime:
+            return
+        if memory_runtime.get("base_system_prompt") is None:
+            memory_runtime["base_system_prompt"] = self.config.system_prompt or ""
+        composed = self._compose_runtime_memory_prompt()
+        if composed:
+            self.config.system_prompt = composed
+            self._state.system_prompt = composed
+
+    def load_runtime_memory_bundle(self, bundle: Any, *, source: str = "preload") -> None:
+        memory_runtime = self._memory_runtime_metadata()
+        if memory_runtime.get("base_system_prompt") is None:
+            memory_runtime["base_system_prompt"] = self.config.system_prompt or ""
+        memory_runtime["instructions"] = [
+            {
+                "memory_kind": item.memory_kind,
+                "title": item.title,
+                "source_type": item.source_type,
+                "source_ref": item.source_ref,
+                "content": item.content,
+                "relevance_score": item.relevance_score,
+                "metadata": dict(item.metadata or {}),
+            }
+            for item in getattr(bundle, "instructions", []) or []
+        ]
+        memory_runtime["recalls"] = [
+            {
+                "memory_kind": item.memory_kind,
+                "title": item.title,
+                "source_type": item.source_type,
+                "source_ref": item.source_ref,
+                "content": item.content,
+                "relevance_score": item.relevance_score,
+                "metadata": dict(item.metadata or {}),
+            }
+            for item in getattr(bundle, "recalls", []) or []
+        ]
+        memory_runtime["source"] = str(source or "preload")
+        memory_runtime["loaded_at"] = datetime.now(timezone.utc).isoformat()
+        self._apply_runtime_memory_prompt_overlay()
+        self._sync_runtime_session_state_view()
+
+    def _tool_runtime_metadata(self) -> Dict[str, Any]:
+        metadata = self._state.metadata.setdefault("tool_runtime", {})
+        metadata.setdefault("records", [])
+        metadata.setdefault("events", [])
+        metadata.setdefault("hook_records", [])
+        metadata.setdefault("checkpoints", [])
+        return metadata
+
+    def _sync_runtime_session_state_view(self) -> None:
+        metadata = self._state.metadata
+        task_id = str(metadata.get("task_id") or self._state.task_context.get("task_id") or "").strip() or None
+        runtime_state = build_legacy_agent_runtime_state(
+            session_id=self.agent_id,
+            agent_type=self.agent_type.value,
+            interaction_state=metadata.get("interaction_runtime") or {},
+            tool_runtime=metadata.get("tool_runtime") or {},
+            memory_runtime=metadata.get("memory_runtime") or {},
+        )
+        metadata["runtime_session_state"] = runtime_state.model_dump()
+        session_key = f"legacy:{task_id}:{self.agent_id}" if task_id else f"legacy:{self.agent_id}"
+        entry = runtime_session_registry.upsert(
+            session_key=session_key,
+            runtime_state=runtime_state,
+            agent_id=self.agent_id,
+            agent_type=self.agent_type.value,
+            task_id=task_id,
+            source="legacy",
+        )
+        metadata["runtime_session_ref"] = {
+            "session_key": entry["session_key"],
+            "session_id": entry["session_id"],
+            "task_id": entry["task_id"],
+            "agent_id": entry["agent_id"],
+            "agent_type": entry["agent_type"],
+            "source": entry["source"],
+            "updated_at": entry["updated_at"],
+        }
+
+    def _record_tool_runtime_lifecycle(
+        self,
+        *,
+        event_name: str,
+        tool_name: str,
+        permission: ToolPermissionDecision | None = None,
+        error_message: str | None = None,
+    ) -> None:
+        runtime_metadata = self._tool_runtime_metadata()
+        event = {
+            "event": event_name,
+            "tool_name": tool_name,
+            "recorded_at": datetime.now(timezone.utc).isoformat(),
+            "permission_source": permission.source if permission else None,
+            "permission_mode": permission.mode if permission else None,
+            "error_message": error_message,
+        }
+        events = runtime_metadata.setdefault("events", [])
+        events.append(event)
+        if len(events) > 200:
+            del events[:-200]
+        runtime_metadata["last_event"] = dict(event)
+        self._record_tool_runtime_hook_matches(
+            event_name=event_name,
+            tool_name=tool_name,
+            permission=permission,
+            error_message=error_message,
+        )
+
+    def _record_tool_runtime_checkpoint(
+        self,
+        *,
+        event_name: str,
+        tool_name: str,
+        skill_ref: str | None,
+        matched_hooks: list[dict[str, Any]],
+        permission: ToolPermissionDecision | None = None,
+        error_message: str | None = None,
+    ) -> None:
+        runtime_metadata = self._tool_runtime_metadata()
+        checkpoint = {
+            "checkpoint_type": AuditCheckpointType.AUTO.value,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "state_payload": {
+                "kind": "runtime_hook",
+                "event": event_name,
+                "tool_name": tool_name,
+                "agent_type": self.agent_type.value,
+                "skill_ref": skill_ref,
+                "matched_hooks": [dict(item) for item in matched_hooks],
+                "reason": error_message,
+                "source": permission.source if permission else None,
+                "mode": permission.mode if permission else None,
+            },
+        }
+        checkpoints = runtime_metadata.setdefault("checkpoints", [])
+        checkpoints.append(checkpoint)
+        if len(checkpoints) > 200:
+            del checkpoints[:-200]
+        runtime_metadata["last_checkpoint"] = dict(checkpoint)
+
+    def _record_tool_runtime_hook_matches(
+        self,
+        *,
+        event_name: str,
+        tool_name: str,
+        permission: ToolPermissionDecision | None = None,
+        error_message: str | None = None,
+    ) -> None:
+        runtime_metadata = self._tool_runtime_metadata()
+        session_hooks = runtime_metadata.get("session_hooks") or {}
+        hook_records = runtime_metadata.setdefault("hook_records", [])
+        wrote_hook_record = False
+        for skill_ref, hook_config in session_hooks.items():
+            matched_hooks = match_runtime_event_hooks(hook_config, event_name=event_name, tool_name=tool_name)
+            if not matched_hooks:
+                continue
+            record = {
+                "event": event_name,
+                "tool_name": tool_name,
+                "skill_ref": skill_ref,
+                "matched_hooks": matched_hooks,
+                "recorded_at": datetime.now(timezone.utc).isoformat(),
+                "permission_source": permission.source if permission else None,
+                "permission_mode": permission.mode if permission else None,
+                "error_message": error_message,
+            }
+            hook_records.append(record)
+            self._record_tool_runtime_checkpoint(
+                event_name=event_name,
+                tool_name=tool_name,
+                skill_ref=skill_ref,
+                matched_hooks=matched_hooks,
+                permission=permission,
+                error_message=error_message,
+            )
+            wrote_hook_record = True
+        persist_without_hook = (
+            event_name == "PermissionDenied"
+            and permission is not None
+            and permission.source == "permission_rule"
+        )
+        if persist_without_hook and not wrote_hook_record:
+            self._record_tool_runtime_checkpoint(
+                event_name=event_name,
+                tool_name=tool_name,
+                skill_ref=None,
+                matched_hooks=[],
+                permission=permission,
+                error_message=error_message,
+            )
+        if len(hook_records) > 200:
+            del hook_records[:-200]
+        if hook_records:
+            runtime_metadata["last_hook_record"] = dict(hook_records[-1])
+
+    def _record_tool_runtime_event(
+        self,
+        *,
+        tool_name: str,
+        status: str,
+        duration_ms: int,
+        permission: ToolPermissionDecision | None = None,
+        error_message: str | None = None,
+    ) -> None:
+        runtime_metadata = self._tool_runtime_metadata()
+        record = {
+            "tool_name": tool_name,
+            "status": status,
+            "duration_ms": max(0, int(duration_ms)),
+            "recorded_at": datetime.now(timezone.utc).isoformat(),
+            "permission_source": permission.source if permission else None,
+            "permission_mode": permission.mode if permission else None,
+            "error_message": error_message,
+        }
+        records = runtime_metadata.setdefault("records", [])
+        records.append(record)
+        if len(records) > 100:
+            del records[:-100]
+        runtime_metadata["last_record"] = dict(record)
+
+    def _evaluate_tool_permission(self, tool_name: str, tool: Any, tool_input: Dict[str, Any]) -> ToolPermissionDecision:
+        interaction_state = self._state.metadata.get("interaction_runtime") or {}
+        explicit = resolve_permission_rule_decision(
+            interaction_state.get("permission_rules"),
+            agent_type=self.agent_type.value,
+            tool_name=tool_name,
+        )
+        if explicit is not None:
+            return explicit
+
+        permission_mode = str(interaction_state.get("permission_mode") or "default").strip().lower()
+        if permission_mode != "plan":
+            return ToolPermissionDecision(allowed=True, source="runtime", mode="allow")
+        if tool_name in {"TodoWrite", "AskUser", "EnterPlanMode", "ExitPlanMode"}:
+            return ToolPermissionDecision(allowed=True, source="runtime", mode="allow")
+        try:
+            is_read_only = bool(tool.is_read_only(**tool_input))
+        except Exception:
+            is_read_only = False
+        if is_read_only:
+            return ToolPermissionDecision(allowed=True, source="runtime", mode="allow")
+        return ToolPermissionDecision(
+            allowed=False,
+            reason=f"Tool '{tool_name}' is blocked in plan mode until the user approves execution.",
+            source="permission_mode",
+            mode="deny",
+        )
+
     async def execute_tool(self, tool_name: str, tool_input: Dict[str, Any]) -> str:
         if self.is_cancelled:
             return "Task cancelled."
@@ -567,8 +887,38 @@ class BaseAgent(ABC):
         await self.emit_tool_call(tool_name, tool_input)
         start = time.time()
         timeout = self._timeout_config.get("tool_timeout", 60)
+        execution_input = dict(tool_input or {})
+        if getattr(tool, "requires_agent_context", False):
+            execution_input.setdefault("_agent", self)
+        permission = self._evaluate_tool_permission(tool_name, tool, dict(tool_input or {}))
+        if permission.allowed:
+            self._record_tool_runtime_lifecycle(
+                event_name="PreToolUse",
+                tool_name=tool_name,
+                permission=permission,
+                error_message=None,
+            )
+        if not permission.allowed:
+            denial_message = permission.reason or "Tool permission denied"
+            self._record_tool_runtime_lifecycle(
+                event_name="PermissionDenied",
+                tool_name=tool_name,
+                permission=permission,
+                error_message=denial_message,
+            )
+            self._record_tool_runtime_event(
+                tool_name=tool_name,
+                status="denied",
+                duration_ms=0,
+                permission=permission,
+                error_message=denial_message,
+            )
+            self._sync_runtime_session_state_view()
+            await self._persist_runtime_session_checkpoint_if_needed()
+            await self.emit_tool_result(tool_name, denial_message, 0)
+            return denial_message
         try:
-            result = await asyncio.wait_for(tool.execute(**tool_input), timeout=timeout)
+            result = await asyncio.wait_for(tool.execute(**execution_input), timeout=timeout)
             duration_ms = int((time.time() - start) * 1000)
             if getattr(result, "success", False):
                 output = str(getattr(result, "data", ""))
@@ -579,19 +929,94 @@ class BaseAgent(ABC):
                             output += "\n\nIssues:\n" + json.dumps(metadata["issues"], ensure_ascii=False, indent=2)
                         if "findings" in metadata:
                             output += "\n\nFindings:\n" + json.dumps(metadata["findings"][:10], ensure_ascii=False, indent=2)
+                self._record_tool_runtime_lifecycle(
+                    event_name="PostToolUse",
+                    tool_name=tool_name,
+                    permission=permission,
+                    error_message=None,
+                )
+                self._record_tool_runtime_event(
+                    tool_name=tool_name,
+                    status="completed",
+                    duration_ms=duration_ms,
+                    permission=permission,
+                    error_message=None,
+                )
+                self._sync_runtime_session_state_view()
+                await self._persist_runtime_session_checkpoint_if_needed()
                 await self.emit_tool_result(tool_name, output, duration_ms)
                 return output[:6000] if len(output) > 6000 else output
             error = str(getattr(result, "error", "Unknown tool error"))
+            self._record_tool_runtime_lifecycle(
+                event_name="PostToolUseFailure",
+                tool_name=tool_name,
+                permission=permission,
+                error_message=error,
+            )
+            self._record_tool_runtime_event(
+                tool_name=tool_name,
+                status="failed",
+                duration_ms=duration_ms,
+                permission=permission,
+                error_message=error,
+            )
+            self._sync_runtime_session_state_view()
+            await self._persist_runtime_session_checkpoint_if_needed()
             await self.emit_tool_result(tool_name, error, duration_ms)
             return f"Tool execution failed: {error}"
         except asyncio.TimeoutError:
             duration_ms = int((time.time() - start) * 1000)
+            self._record_tool_runtime_lifecycle(
+                event_name="PostToolUseFailure",
+                tool_name=tool_name,
+                permission=permission,
+                error_message=f"Timeout ({timeout}s)",
+            )
+            self._record_tool_runtime_event(
+                tool_name=tool_name,
+                status="timeout",
+                duration_ms=duration_ms,
+                permission=permission,
+                error_message=f"Timeout ({timeout}s)",
+            )
+            self._sync_runtime_session_state_view()
+            await self._persist_runtime_session_checkpoint_if_needed()
             await self.emit_tool_result(tool_name, f"Timeout ({timeout}s)", duration_ms)
             return f"Tool '{tool_name}' timed out after {timeout}s"
         except asyncio.CancelledError:
+            self._record_tool_runtime_lifecycle(
+                event_name="PostToolUseFailure",
+                tool_name=tool_name,
+                permission=permission,
+                error_message="Task cancelled.",
+            )
+            self._record_tool_runtime_event(
+                tool_name=tool_name,
+                status="cancelled",
+                duration_ms=int((time.time() - start) * 1000),
+                permission=permission,
+                error_message="Task cancelled.",
+            )
+            self._sync_runtime_session_state_view()
+            await self._persist_runtime_session_checkpoint_if_needed()
             return "Task cancelled."
         except Exception as exc:
             logger.error("Tool execution error for %s: %s", tool_name, exc, exc_info=True)
+            self._record_tool_runtime_lifecycle(
+                event_name="PostToolUseFailure",
+                tool_name=tool_name,
+                permission=permission,
+                error_message=str(exc),
+            )
+            self._record_tool_runtime_event(
+                tool_name=tool_name,
+                status="error",
+                duration_ms=int((time.time() - start) * 1000),
+                permission=permission,
+                error_message=str(exc),
+            )
+            self._sync_runtime_session_state_view()
+            await self._persist_runtime_session_checkpoint_if_needed()
             return f"Tool execution error ({tool_name}): {exc}"
 
     async def call_tool(self, tool_name: str, **kwargs) -> Any:

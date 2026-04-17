@@ -21,12 +21,27 @@ class RuntimeMessageRole(StrEnum):
     HANDOFF = "handoff"
 
 
+class RuntimeContinueReason(StrEnum):
+    NEXT_TURN = "next_turn"
+    MAX_OUTPUT_TOKENS_ESCALATE = "max_output_tokens_escalate"
+    MAX_OUTPUT_TOKENS_RECOVERY = "max_output_tokens_recovery"
+    REACTIVE_COMPACT_RETRY = "reactive_compact_retry"
+    COLLAPSE_DRAIN_RETRY = "collapse_drain_retry"
+    STOP_HOOK_BLOCKING = "stop_hook_blocking"
+    TOKEN_BUDGET_CONTINUATION = "token_budget_continuation"
+
+
 class RuntimeStopReason(StrEnum):
-    ASSISTANT_TURN_COMPLETE = "assistant_turn_complete"
-    USER_FOLLOW_UP_REQUIRED = "user_follow_up_required"
-    MODEL_STOP = "model_stop"
-    TOOL_EXECUTION_CONTINUE = "tool_execution_continue"
-    MAX_TURNS_EXCEEDED = "max_turns_exceeded"
+    COMPLETED = "completed"
+    BLOCKING_LIMIT = "blocking_limit"
+    PROMPT_TOO_LONG = "prompt_too_long"
+    IMAGE_ERROR = "image_error"
+    MODEL_ERROR = "model_error"
+    ABORTED_STREAMING = "aborted_streaming"
+    ABORTED_TOOLS = "aborted_tools"
+    STOP_HOOK_PREVENTED = "stop_hook_prevented"
+    HOOK_STOPPED = "hook_stopped"
+    MAX_TURNS = "max_turns"
 
 
 @dataclass(slots=True)
@@ -62,6 +77,15 @@ class ToolExecutionRecord:
     result: ToolExecutionPayload
     error_message: str | None = None
     duration_ms: int | None = None
+
+
+@dataclass(slots=True)
+class RuntimeModelResponse:
+    content: str = ""
+    tool_calls: list[dict[str, Any]] = field(default_factory=list)
+    stop_reason: str | None = None
+    recoverable_error_kind: str | None = None
+    recoverable_error_message: str | None = None
 
 
 @dataclass(slots=True)
@@ -110,7 +134,8 @@ class RuntimeSessionSnapshot:
 @dataclass(slots=True)
 class TurnExecutionResult:
     turn_id: str
-    stop_reason: RuntimeStopReason
+    stop_reason: RuntimeStopReason | None
     assistant_message_id: str | None = None
     tool_call_ids: list[str] = field(default_factory=list)
     tool_result_message_ids: list[str] = field(default_factory=list)
+    transition: RuntimeContinueReason | None = None

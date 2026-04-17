@@ -195,7 +195,7 @@ async def test_finding_agent_prefers_structured_tool_calling_run(monkeypatch):
     llm_service.chat_completion = AsyncMock(
         side_effect=[
             {
-                "content": "先读取主技能文件。",
+                "content": "Read the primary skill file first.",
                 "usage": {"total_tokens": 11},
                 "finish_reason": "tool_calls",
                 "tool_calls": [
@@ -210,7 +210,7 @@ async def test_finding_agent_prefers_structured_tool_calling_run(monkeypatch):
                 ],
             },
             {
-                "content": "同时比对控制器和 mapper。",
+                "content": "Compare the controller and mapper next.",
                 "usage": {"total_tokens": 13},
                 "finish_reason": "tool_calls",
                 "tool_calls": [
@@ -361,7 +361,7 @@ def test_finding_agent_fallback_result_does_not_use_heuristic_findings():
         SimpleNamespace(
             thought='Tool Calls:\\n- search_code({"keyword":"glueSource"})',
             action="search_code",
-            observation="搜索结果: glueSource",
+            observation="闁瑰吋绮庨崒銊х磼閹惧浜? glueSource",
         )
     ]
 
@@ -470,6 +470,34 @@ def test_evidence_bundle_store_upserts_and_summarizes_bundles():
     assert summary["file_paths"] == ["src/api.py"]
     assert summary["entry_point_refs"] == ["src/api.py:10"]
     assert summary["evidence_gaps"] == ["missing_verification"]
+
+
+def test_finding_controller_caps_initial_queue_with_family_diversity_and_tracks_suppressed_candidates():
+    from app.services.agent.agents.finding_controller import FindingController
+
+    controller = FindingController()
+    runtime_state = controller.build_runtime_state(
+        {
+            "config": {"max_active_candidates": 3},
+            "target_files": ["app/api/uploads.py", "app/api/admin.py"],
+            "focus_vulnerabilities": ["idor", "auth_bypass", "sql_injection", "xss"],
+            "recon_data": {
+                "entry_points": [
+                    {"type": "http", "file": "app/api/uploads.py", "line": 11},
+                    {"type": "http", "file": "app/api/admin.py", "line": 5},
+                ],
+                "priority_paths": ["app/api/uploads.py", "app/api/admin.py", "app/services/authz.py"],
+                "project_profile": {"languages": ["Python"], "frameworks": ["FastAPI"]},
+            },
+        }
+    )
+
+    assert runtime_state.plan.max_active_candidates == 3
+    assert len(runtime_state.queue) == 3
+    assert len({candidate.vuln_family for candidate in runtime_state.queue}) == 3
+    assert runtime_state.discarded_candidates
+    assert runtime_state.discarded_candidates[0]["discard_reason"] == "initial_queue_cap"
+    assert runtime_state.metrics["queue.initial_candidates_raw"] > runtime_state.metrics["queue.initial_candidates"]
 
 
 def test_finding_controller_builds_coverage_first_runtime_state():
@@ -682,7 +710,7 @@ def test_candidate_worker_records_evidence_for_candidate():
         candidate,
         "read_file",
         {"file_path": "app/api/uploads.py", "start_line": 11, "end_line": 19},
-        "文件: app/api/uploads.py\n行数: 11-19\n```python\nowner_id = request.user_id\nservice.approve(upload_id)\n```",
+        "闁哄倸娲ｅ▎? app/api/uploads.py\n閻炴稑鏈弳? 11-19\n```python\nowner_id = request.user_id\nservice.approve(upload_id)\n```",
     )
 
     assert result.evidence_bundle_ids
@@ -734,12 +762,17 @@ def test_finding_synthesizer_builds_candidate_findings_from_evidence():
         queue=[candidate],
     )
 
+    runtime_state.unresolved_candidates = [{"candidate_id": "cand-1", "unresolved_reason": "followup exhausted"}]
+    runtime_state.discarded_candidates = [{"candidate_id": "cand-x", "discard_reason": "worker budget exhausted"}]
+
     synthesized = FindingSynthesizer().synthesize(runtime_state, store)
 
     assert synthesized["findings"]
     assert synthesized["findings"][0]["vulnerability_type"] == "idor"
     assert synthesized["findings"][0]["file_path"] == "app/api/uploads.py"
     assert synthesized["findings"][0]["verdict"] == "candidate"
+    assert "1 unresolved candidates remain" in synthesized["summary"]
+    assert "1 low-value candidates were discarded" in synthesized["summary"]
 
 
 @pytest.mark.asyncio
@@ -952,6 +985,93 @@ async def test_finding_agent_builds_iteration_messages_from_active_candidate_loc
     assert any(active_id in item["content"] for item in messages if item["role"] == "user")
 
 
+def test_finding_agent_iteration_messages_include_backlog_summaries():
+    from app.services.agent.agents.finding_controller import AuditPlan, FindingRuntimeState, WorkerSession
+    from app.services.agent.agents.finding_coverage import CoverageMap
+    from app.services.agent.agents.finding_candidates import CandidateCase
+
+    agent = FindingAgent(llm_service=MagicMock(), tools={}, event_emitter=MagicMock())
+    active_candidate = CandidateCase(
+        id="cand-1",
+        vuln_family="idor",
+        priority=90,
+        entry_point_refs=["app/api/uploads.py:11"],
+        source_refs=["app/api/uploads.py:11"],
+        sink_refs=["app/services/authz.py:44"],
+        control_refs=[],
+    )
+    unresolved_candidate = CandidateCase(
+        id="cand-2",
+        vuln_family="sql_injection",
+        priority=95,
+        entry_point_refs=["app/api/search.py:10"],
+        source_refs=["app/api/search.py:10"],
+        sink_refs=["app/services/search.py:44"],
+        control_refs=[],
+        evidence_bundle_ids=["ev-2"],
+    )
+    agent._runtime_state = FindingRuntimeState(
+        plan=AuditPlan(focus_vulnerabilities=["idor", "sql_injection"]),
+        coverage=CoverageMap(entry_points=["app/api/uploads.py:11", "app/api/search.py:10"]),
+        queue=[active_candidate, unresolved_candidate],
+        worker_sessions={
+            "cand-1": WorkerSession(
+                candidate_id="cand-1",
+                brief="brief",
+                max_budget=4,
+                remaining_budget=2,
+                status="active",
+                message_history=[{"role": "user", "content": "brief"}],
+                followup_rounds_left=0,
+            ),
+            "cand-2": WorkerSession(
+                candidate_id="cand-2",
+                brief="brief-2",
+                max_budget=4,
+                remaining_budget=0,
+                status="budget_exhausted",
+                rotation_reason="followup exhausted",
+                message_history=[{"role": "user", "content": "brief-2"}],
+                followup_rounds_left=0,
+            ),
+        },
+        active_candidate_id="cand-1",
+        discarded_candidates=[{"candidate_id": "cand-x", "discard_reason": "worker budget exhausted"}],
+        metrics={"convergence": {"selected_candidate_id": "cand-1"}},
+    )
+    agent._evidence_store.upsert(
+        type("Bundle", (), {
+            "id": "ev-2",
+            "file_path": "app/api/search.py",
+            "line_start": 10,
+            "line_end": 18,
+            "snippet": "db.execute(query)",
+            "source_desc": "request parameter",
+            "sink_desc": "SQL execution",
+            "control_analysis": "query is concatenated without parameterization",
+            "business_flow_analysis": "search flow",
+            "entry_point_refs": ["app/api/search.py:10"],
+            "priority_path_refs": ["app/api/search.py"],
+            "evidence_gaps": ["dynamic_verification_pending"],
+            "confidence": 0.84,
+        })()
+    )
+    agent._conversation_history = [
+        {"role": "system", "content": "system"},
+        {"role": "user", "content": "initial"},
+    ]
+    agent._iteration = 5
+
+    messages = agent._build_iteration_messages()
+    context_message = next(item["content"] for item in messages if item["role"] == "user" and "Active candidate local context" in item["content"])
+
+    assert '"discarded_candidates"' in context_message
+    assert '"candidate_id": "cand-x"' in context_message
+    assert '"unresolved_candidates"' in context_message
+    assert '"candidate_id": "cand-2"' in context_message
+    assert '"unresolved_reason": "followup exhausted"' in context_message
+
+
 def test_finding_agent_records_local_candidate_history():
     from app.services.agent.agents.finding_controller import AuditPlan, FindingRuntimeState, WorkerSession
     from app.services.agent.agents.finding_coverage import CoverageMap
@@ -996,6 +1116,41 @@ def test_finding_agent_records_local_candidate_history():
 
 
 @pytest.mark.asyncio
+async def test_finding_agent_initial_message_reports_queue_suppression_summary(monkeypatch):
+    agent = FindingAgent(llm_service=MagicMock(), tools={}, event_emitter=MagicMock())
+
+    async def fake_preload(user_id, context):
+        del user_id, context
+        return PreloadedSkillContext(primary_skill_name="code-audit-finding")
+
+    monkeypatch.setattr(agent._skill_preloader, "preload", fake_preload)
+
+    context = await agent._prepare_runtime_context(
+        {
+            "project_info": {"name": "demo", "root": "."},
+            "config": {"max_active_candidates": 2},
+            "target_files": ["app/api/uploads.py", "app/api/admin.py"],
+            "focus_vulnerabilities": ["idor", "auth_bypass", "sql_injection", "xss"],
+            "skill_context": {"route_plan": {"primary_skill": "code-audit-finding"}},
+            "recon_data": {
+                "entry_points": [
+                    {"type": "http", "file": "app/api/uploads.py", "line": 11},
+                    {"type": "http", "file": "app/api/admin.py", "line": 5},
+                ],
+                "priority_paths": ["app/api/uploads.py", "app/api/admin.py", "app/services/authz.py"],
+                "project_profile": {"languages": ["Python"], "frameworks": ["FastAPI"]},
+            },
+        }
+    )
+
+    message = agent._build_initial_message(context)
+
+    assert '"max_active_candidates": 2' in message
+    assert '"initial_queue_suppressed":' in message
+    assert '"Initial queue generation rules"' in message
+
+
+@pytest.mark.asyncio
 async def test_finding_agent_iteration_messages_include_global_budget_and_report_phase_guidance(monkeypatch):
     agent = FindingAgent(llm_service=MagicMock(), tools={}, event_emitter=MagicMock())
     agent.config.max_iterations = 32
@@ -1032,8 +1187,8 @@ async def test_finding_agent_iteration_messages_include_global_budget_and_report
     assert '"current_iteration": 26' in context_message
     assert '"max_iterations": 32' in context_message
     assert '"rounds_left": 6' in context_message
-    assert '"phase": "report_finalization"' in context_message
-    assert "Do not expand to new candidates" in context_message
+    assert '"phase": "evidence_collection"' in context_message
+    assert "Stay in evidence collection mode" in context_message
 
 
 def test_finding_agent_preemptive_finalization_prompt_escalates_by_remaining_rounds():
@@ -1057,10 +1212,10 @@ def test_finding_agent_aborts_llm_failures_immediately_in_final_only_mode():
         phase_reason="closed_exploit_chain_candidate",
     )
 
-    assert agent._should_abort_after_llm_failure("[LLM调用错误: timeout] 请重试。", 1) is True
+    assert agent._should_abort_after_llm_failure("[LLM error: timeout] retry", 1) is True
 
     agent._runtime_state.phase = "evidence_collection"
-    assert agent._should_abort_after_llm_failure("[LLM调用错误: timeout] 请重试。", 1) is False
+    assert agent._should_abort_after_llm_failure("[LLM error: timeout] retry", 1) is False
 
 
 def test_finding_agent_enters_report_phase_when_closed_chain_candidate_exists():
@@ -1154,6 +1309,559 @@ def test_finding_agent_report_phase_freezes_candidate_rotation():
     assert runtime_state.phase_reason == "tail_budget"
     assert runtime_state.active_candidate_id == current_id
     assert runtime_state.rotation_history == []
+
+
+
+
+def test_finding_agent_does_not_force_report_phase_when_viable_candidates_remain():
+    from app.services.agent.agents.finding_controller import FindingController
+
+    controller = FindingController()
+    runtime_state = controller.build_runtime_state(
+        {
+            "target_files": ["app/api/uploads.py"],
+            "focus_vulnerabilities": ["idor", "auth_bypass"],
+            "recon_data": {
+                "entry_points": [{"type": "http", "file": "app/api/uploads.py", "line": 11}],
+                "priority_paths": ["app/api/uploads.py", "app/services/authz.py"],
+                "project_profile": {"languages": ["Python"], "frameworks": ["FastAPI"]},
+            },
+        }
+    )
+    agent = FindingAgent(llm_service=MagicMock(), tools={}, event_emitter=MagicMock())
+    agent._runtime_state = runtime_state
+    agent.config.max_iterations = 32
+    agent._iteration = 26
+
+    agent._update_runtime_phase(current_iteration=26)
+
+    assert runtime_state.phase == "evidence_collection"
+    assert runtime_state.phase_reason == ""
+
+
+def test_finding_agent_enters_report_phase_when_queue_is_exhausted_with_report_ready_evidence():
+    from app.services.agent.agents.finding_candidates import CandidateCase
+    from app.services.agent.agents.finding_controller import AuditPlan, FindingRuntimeState, WorkerSession
+    from app.services.agent.agents.finding_coverage import CoverageMap
+    from app.services.agent.agents.finding_evidence import EvidenceBundle
+
+    candidate = CandidateCase(
+        id="cand-1",
+        vuln_family="idor",
+        priority=95,
+        entry_point_refs=["app/api/uploads.py:11"],
+        source_refs=["app/api/uploads.py:11"],
+        sink_refs=["app/services/authz.py:44"],
+        control_refs=["app/services/authz.py:44"],
+        business_flow_notes=["upload approval flow"],
+        evidence_bundle_ids=["ev-1"],
+    )
+    agent = FindingAgent(llm_service=MagicMock(), tools={}, event_emitter=MagicMock())
+    agent._runtime_state = FindingRuntimeState(
+        plan=AuditPlan(focus_vulnerabilities=["idor"]),
+        coverage=CoverageMap(entry_points=["app/api/uploads.py:11"]),
+        queue=[candidate],
+        worker_sessions={
+            "cand-1": WorkerSession(
+                candidate_id="cand-1",
+                brief="brief",
+                max_budget=4,
+                remaining_budget=0,
+                status="budget_exhausted",
+                message_history=[{"role": "user", "content": "brief"}],
+                followup_rounds_left=0,
+            )
+        },
+        active_candidate_id="cand-1",
+    )
+    agent._evidence_store.upsert(
+        EvidenceBundle(
+            id="ev-1",
+            file_path="app/api/uploads.py",
+            line_start=11,
+            line_end=19,
+            snippet="service.approve(upload_id)",
+            source_desc="request path upload_id",
+            sink_desc="approval state change",
+            control_analysis="ownership check is missing in the reviewed path",
+            business_flow_analysis="upload approval flow",
+            entry_point_refs=["app/api/uploads.py:11"],
+            priority_path_refs=["app/api/uploads.py"],
+            evidence_gaps=["dynamic_verification_pending"],
+            confidence=0.9,
+        )
+    )
+
+    agent._update_runtime_phase(current_iteration=12)
+
+    assert agent._runtime_state.phase == "report_finalization"
+    assert agent._runtime_state.phase_reason == "coverage_saturated"
+    assert agent._runtime_state.active_candidate_id == "cand-1"
+
+def test_finding_agent_promotes_highest_value_runnable_candidate_after_budget_rotation():
+    from app.services.agent.agents.finding_candidates import CandidateCase
+    from app.services.agent.agents.finding_controller import AuditPlan, FindingRuntimeState, WorkerSession
+    from app.services.agent.agents.finding_coverage import CoverageMap
+    from app.services.agent.agents.finding_evidence import EvidenceBundle
+
+    cand_1 = CandidateCase(
+        id="cand-1",
+        vuln_family="idor",
+        priority=120,
+        entry_point_refs=["app/api/one.py:10"],
+        source_refs=["app/api/one.py:10"],
+        sink_refs=["app/services/one.py:30"],
+        control_refs=[],
+    )
+    cand_2 = CandidateCase(
+        id="cand-2",
+        vuln_family="auth_bypass",
+        priority=80,
+        entry_point_refs=["app/api/two.py:10"],
+        source_refs=["app/api/two.py:10"],
+        sink_refs=["app/services/two.py:30"],
+        control_refs=[],
+    )
+    cand_3 = CandidateCase(
+        id="cand-3",
+        vuln_family="sql_injection",
+        priority=90,
+        entry_point_refs=["app/api/three.py:10"],
+        source_refs=["app/api/three.py:10"],
+        sink_refs=["app/services/three.py:30"],
+        control_refs=[],
+        evidence_bundle_ids=["ev-3"],
+    )
+    agent = FindingAgent(llm_service=MagicMock(), tools={}, event_emitter=MagicMock())
+    agent._runtime_state = FindingRuntimeState(
+        plan=AuditPlan(focus_vulnerabilities=["idor", "auth_bypass", "sql_injection"]),
+        coverage=CoverageMap(entry_points=["app/api/one.py:10", "app/api/two.py:10", "app/api/three.py:10"]),
+        queue=[cand_1, cand_2, cand_3],
+        worker_sessions={
+            "cand-1": WorkerSession(
+                candidate_id="cand-1",
+                brief="brief-1",
+                max_budget=4,
+                remaining_budget=1,
+                status="active",
+                message_history=[{"role": "user", "content": "brief-1"}],
+                followup_rounds_left=0,
+            ),
+            "cand-2": WorkerSession(
+                candidate_id="cand-2",
+                brief="brief-2",
+                max_budget=4,
+                remaining_budget=3,
+                status="pending",
+                message_history=[{"role": "user", "content": "brief-2"}],
+                followup_rounds_left=0,
+            ),
+            "cand-3": WorkerSession(
+                candidate_id="cand-3",
+                brief="brief-3",
+                max_budget=4,
+                remaining_budget=2,
+                status="needs_followup",
+                message_history=[{"role": "user", "content": "brief-3"}],
+                followup_rounds_left=1,
+            ),
+        },
+        active_candidate_id="cand-1",
+    )
+    agent._evidence_store.upsert(
+        EvidenceBundle(
+            id="ev-3",
+            file_path="app/api/three.py",
+            line_start=10,
+            line_end=16,
+            snippet="execute(query)",
+            source_desc="request parameter",
+            sink_desc="SQL execution",
+            control_analysis="parameterization is missing",
+            business_flow_analysis="search flow",
+            entry_point_refs=["app/api/three.py:10"],
+            priority_path_refs=["app/api/three.py"],
+            evidence_gaps=["dynamic_verification_pending"],
+            confidence=0.92,
+        )
+    )
+
+    agent._controller.consume_worker_budget(agent._runtime_state, "cand-1", spent=1, reason="worker budget exhausted")
+    promoted = agent._promote_best_runnable_candidate()
+
+    assert promoted is not None
+    assert promoted.id == "cand-3"
+    assert agent._runtime_state.active_candidate_id == "cand-3"
+    assert agent._runtime_state.worker_sessions["cand-3"].status == "active"
+
+
+def test_finding_agent_advance_candidate_prefers_highest_value_runnable_candidate():
+    from app.services.agent.agents.finding_candidates import CandidateCase
+    from app.services.agent.agents.finding_controller import AuditPlan, FindingRuntimeState, WorkerSession
+    from app.services.agent.agents.finding_coverage import CoverageMap
+    from app.services.agent.agents.finding_evidence import EvidenceBundle
+
+    cand_1 = CandidateCase(
+        id="cand-1",
+        vuln_family="idor",
+        priority=120,
+        entry_point_refs=["app/api/one.py:10"],
+        source_refs=["app/api/one.py:10"],
+        sink_refs=["app/services/one.py:30"],
+        control_refs=[],
+    )
+    cand_2 = CandidateCase(
+        id="cand-2",
+        vuln_family="auth_bypass",
+        priority=80,
+        entry_point_refs=["app/api/two.py:10"],
+        source_refs=["app/api/two.py:10"],
+        sink_refs=["app/services/two.py:30"],
+        control_refs=[],
+    )
+    cand_3 = CandidateCase(
+        id="cand-3",
+        vuln_family="sql_injection",
+        priority=90,
+        entry_point_refs=["app/api/three.py:10"],
+        source_refs=["app/api/three.py:10"],
+        sink_refs=["app/services/three.py:30"],
+        control_refs=[],
+        evidence_bundle_ids=["ev-3"],
+    )
+    agent = FindingAgent(llm_service=MagicMock(), tools={}, event_emitter=MagicMock())
+    agent._runtime_state = FindingRuntimeState(
+        plan=AuditPlan(focus_vulnerabilities=["idor", "auth_bypass", "sql_injection"]),
+        coverage=CoverageMap(entry_points=["app/api/one.py:10", "app/api/two.py:10", "app/api/three.py:10"]),
+        queue=[cand_1, cand_2, cand_3],
+        worker_sessions={
+            "cand-1": WorkerSession(
+                candidate_id="cand-1",
+                brief="brief-1",
+                max_budget=4,
+                remaining_budget=3,
+                status="active",
+                message_history=[{"role": "user", "content": "brief-1"}],
+                followup_rounds_left=0,
+            ),
+            "cand-2": WorkerSession(
+                candidate_id="cand-2",
+                brief="brief-2",
+                max_budget=4,
+                remaining_budget=3,
+                status="pending",
+                message_history=[{"role": "user", "content": "brief-2"}],
+                followup_rounds_left=0,
+            ),
+            "cand-3": WorkerSession(
+                candidate_id="cand-3",
+                brief="brief-3",
+                max_budget=4,
+                remaining_budget=2,
+                status="pending",
+                message_history=[{"role": "user", "content": "brief-3"}],
+                followup_rounds_left=1,
+            ),
+        },
+        active_candidate_id="cand-1",
+    )
+    agent._evidence_store.upsert(
+        EvidenceBundle(
+            id="ev-3",
+            file_path="app/api/three.py",
+            line_start=10,
+            line_end=16,
+            snippet="execute(query)",
+            source_desc="request parameter",
+            sink_desc="SQL execution",
+            control_analysis="parameterization is missing",
+            business_flow_analysis="search flow",
+            entry_point_refs=["app/api/three.py:10"],
+            priority_path_refs=["app/api/three.py"],
+            evidence_gaps=["dynamic_verification_pending"],
+            confidence=0.92,
+        )
+    )
+
+    agent._advance_candidate("loop block")
+
+    assert agent._runtime_state.active_candidate_id == "cand-3"
+    assert agent._runtime_state.worker_sessions["cand-1"].status == "rotated"
+    assert agent._runtime_state.worker_sessions["cand-3"].status == "active"
+
+
+def test_finding_agent_prunes_budget_exhausted_no_evidence_candidates_into_discarded_backlog():
+    from app.services.agent.agents.finding_candidates import CandidateCase
+    from app.services.agent.agents.finding_controller import AuditPlan, FindingRuntimeState, WorkerSession
+    from app.services.agent.agents.finding_coverage import CoverageMap
+
+    cand_1 = CandidateCase(
+        id="cand-1",
+        vuln_family="idor",
+        priority=120,
+        entry_point_refs=["app/api/one.py:10"],
+        source_refs=["app/api/one.py:10"],
+        sink_refs=["app/services/one.py:30"],
+        control_refs=[],
+    )
+    cand_2 = CandidateCase(
+        id="cand-2",
+        vuln_family="auth_bypass",
+        priority=100,
+        entry_point_refs=["app/api/two.py:10"],
+        source_refs=["app/api/two.py:10"],
+        sink_refs=["app/services/two.py:30"],
+        control_refs=[],
+    )
+    agent = FindingAgent(llm_service=MagicMock(), tools={}, event_emitter=MagicMock())
+    agent._runtime_state = FindingRuntimeState(
+        plan=AuditPlan(focus_vulnerabilities=["idor", "auth_bypass"]),
+        coverage=CoverageMap(entry_points=["app/api/one.py:10", "app/api/two.py:10"]),
+        queue=[cand_1, cand_2],
+        worker_sessions={
+            "cand-1": WorkerSession(
+                candidate_id="cand-1",
+                brief="brief-1",
+                max_budget=4,
+                remaining_budget=0,
+                status="budget_exhausted",
+                rotation_reason="worker budget exhausted",
+                message_history=[{"role": "user", "content": "brief-1"}],
+                followup_rounds_left=0,
+            ),
+            "cand-2": WorkerSession(
+                candidate_id="cand-2",
+                brief="brief-2",
+                max_budget=4,
+                remaining_budget=3,
+                status="pending",
+                message_history=[{"role": "user", "content": "brief-2"}],
+                followup_rounds_left=0,
+            ),
+        },
+        active_candidate_id="cand-1",
+    )
+
+    agent._refresh_candidate_backlog()
+
+    assert [candidate.id for candidate in agent._runtime_state.queue] == ["cand-2"]
+    assert agent._runtime_state.active_candidate_id == "cand-2"
+    assert agent._runtime_state.discarded_candidates
+    assert agent._runtime_state.discarded_candidates[0]["candidate_id"] == "cand-1"
+    assert agent._runtime_state.discarded_candidates[0]["discard_reason"] == "worker budget exhausted"
+
+
+def test_finding_agent_tracks_evidence_backed_exhausted_candidates_as_unresolved():
+    from app.services.agent.agents.finding_candidates import CandidateCase
+    from app.services.agent.agents.finding_controller import AuditPlan, FindingRuntimeState, WorkerSession
+    from app.services.agent.agents.finding_coverage import CoverageMap
+    from app.services.agent.agents.finding_evidence import EvidenceBundle
+
+    cand_1 = CandidateCase(
+        id="cand-1",
+        vuln_family="sql_injection",
+        priority=110,
+        entry_point_refs=["app/api/search.py:10"],
+        source_refs=["app/api/search.py:10"],
+        sink_refs=["app/services/search.py:30"],
+        control_refs=[],
+        evidence_bundle_ids=["ev-1"],
+    )
+    agent = FindingAgent(llm_service=MagicMock(), tools={}, event_emitter=MagicMock())
+    agent._runtime_state = FindingRuntimeState(
+        plan=AuditPlan(focus_vulnerabilities=["sql_injection"]),
+        coverage=CoverageMap(entry_points=["app/api/search.py:10"]),
+        queue=[cand_1],
+        worker_sessions={
+            "cand-1": WorkerSession(
+                candidate_id="cand-1",
+                brief="brief-1",
+                max_budget=4,
+                remaining_budget=0,
+                status="budget_exhausted",
+                rotation_reason="followup exhausted",
+                message_history=[{"role": "user", "content": "brief-1"}],
+                followup_rounds_left=0,
+            )
+        },
+        active_candidate_id="cand-1",
+    )
+    agent._evidence_store.upsert(
+        EvidenceBundle(
+            id="ev-1",
+            file_path="app/api/search.py",
+            line_start=10,
+            line_end=18,
+            snippet="db.execute(query)",
+            source_desc="request parameter",
+            sink_desc="SQL execution",
+            control_analysis="query is concatenated without parameterization",
+            business_flow_analysis="search flow",
+            entry_point_refs=["app/api/search.py:10"],
+            priority_path_refs=["app/api/search.py"],
+            evidence_gaps=["dynamic_verification_pending"],
+            confidence=0.84,
+        )
+    )
+
+    agent._refresh_candidate_backlog()
+
+    assert [candidate.id for candidate in agent._runtime_state.queue] == ["cand-1"]
+    assert agent._runtime_state.unresolved_candidates
+    assert agent._runtime_state.unresolved_candidates[0]["candidate_id"] == "cand-1"
+    assert agent._runtime_state.unresolved_candidates[0]["unresolved_reason"] == "followup exhausted"
+
+
+def test_finding_controller_runtime_plan_exposes_convergence_stop_conditions():
+    from app.services.agent.agents.finding_controller import FindingController
+
+    controller = FindingController()
+    runtime_state = controller.build_runtime_state(
+        {
+            "target_files": ["app/api/uploads.py"],
+            "focus_vulnerabilities": ["idor"],
+            "recon_data": {
+                "entry_points": [{"type": "http", "file": "app/api/uploads.py", "line": 11}],
+                "priority_paths": ["app/api/uploads.py"],
+                "project_profile": {"languages": ["Python"], "frameworks": ["FastAPI"]},
+            },
+        }
+    )
+
+    assert runtime_state.plan.stop_conditions == [
+        "closed_exploit_chain_found",
+        "coverage_saturated_with_reportable_evidence",
+        "queue_exhausted_without_reportable_evidence",
+        "controller_budget_exhausted",
+    ]
+
+
+def test_finding_agent_convergence_decision_surfaces_best_report_candidate():
+    from app.services.agent.agents.finding_candidates import CandidateCase
+    from app.services.agent.agents.finding_controller import AuditPlan, FindingRuntimeState, WorkerSession
+    from app.services.agent.agents.finding_coverage import CoverageMap
+    from app.services.agent.agents.finding_evidence import EvidenceBundle
+
+    candidate_a = CandidateCase(
+        id="cand-a",
+        vuln_family="idor",
+        priority=90,
+        entry_point_refs=["app/api/a.py:10"],
+        source_refs=["app/api/a.py:10"],
+        sink_refs=["app/services/a.py:30"],
+        control_refs=[],
+        evidence_bundle_ids=["ev-a"],
+    )
+    candidate_b = CandidateCase(
+        id="cand-b",
+        vuln_family="auth_bypass",
+        priority=110,
+        entry_point_refs=["app/api/b.py:10"],
+        source_refs=["app/api/b.py:10"],
+        sink_refs=["app/services/b.py:30"],
+        control_refs=[],
+        evidence_bundle_ids=["ev-b1", "ev-b2"],
+    )
+    agent = FindingAgent(llm_service=MagicMock(), tools={}, event_emitter=MagicMock())
+    agent._runtime_state = FindingRuntimeState(
+        plan=AuditPlan(focus_vulnerabilities=["idor", "auth_bypass"]),
+        coverage=CoverageMap(entry_points=["app/api/a.py:10", "app/api/b.py:10"]),
+        queue=[candidate_a, candidate_b],
+        worker_sessions={
+            "cand-a": WorkerSession(
+                candidate_id="cand-a",
+                brief="brief-a",
+                max_budget=4,
+                remaining_budget=0,
+                status="budget_exhausted",
+                message_history=[{"role": "user", "content": "brief-a"}],
+                followup_rounds_left=0,
+            ),
+            "cand-b": WorkerSession(
+                candidate_id="cand-b",
+                brief="brief-b",
+                max_budget=4,
+                remaining_budget=0,
+                status="completed",
+                message_history=[{"role": "user", "content": "brief-b"}],
+                followup_rounds_left=0,
+            ),
+        },
+        active_candidate_id="cand-a",
+    )
+    agent._evidence_store.upsert(
+        EvidenceBundle(
+            id="ev-a",
+            file_path="app/api/a.py",
+            line_start=10,
+            line_end=16,
+            snippet="update_record(target_id)",
+            source_desc="request path id",
+            sink_desc="record update",
+            control_analysis="ownership validation is missing",
+            business_flow_analysis="tenant update path",
+            entry_point_refs=["app/api/a.py:10"],
+            priority_path_refs=["app/api/a.py"],
+            evidence_gaps=["dynamic_verification_pending"],
+            confidence=0.87,
+        )
+    )
+    agent._evidence_store.upsert(
+        EvidenceBundle(
+            id="ev-b1",
+            file_path="app/api/b.py",
+            line_start=10,
+            line_end=16,
+            snippet="if token: allow_admin()",
+            source_desc="Authorization header",
+            sink_desc="admin gate",
+            control_analysis="missing role check",
+            business_flow_analysis="admin workflow",
+            entry_point_refs=["app/api/b.py:10"],
+            priority_path_refs=["app/api/b.py"],
+            evidence_gaps=[],
+            confidence=0.93,
+        )
+    )
+    agent._evidence_store.upsert(
+        EvidenceBundle(
+            id="ev-b2",
+            file_path="app/services/b.py",
+            line_start=30,
+            line_end=37,
+            snippet="return do_admin_action()",
+            source_desc="Authorization header",
+            sink_desc="privileged action",
+            control_analysis="admin action executes without role enforcement",
+            business_flow_analysis="admin workflow",
+            entry_point_refs=["app/api/b.py:10"],
+            priority_path_refs=["app/services/b.py"],
+            evidence_gaps=[],
+            confidence=0.95,
+        )
+    )
+
+    decision = agent._build_convergence_decision(current_iteration=14)
+
+    assert decision["phase"] == "report_finalization"
+    assert decision["reason"] == "closed_exploit_chain_candidate"
+    assert decision["selected_candidate_id"] == "cand-b"
+    assert decision["stop_condition"] == "closed_exploit_chain_found"
+
+
+def test_finding_agent_final_only_mode_activates_for_coverage_saturated_finalization():
+    from app.services.agent.agents.finding_controller import AuditPlan, FindingRuntimeState
+    from app.services.agent.agents.finding_coverage import CoverageMap
+
+    agent = FindingAgent(llm_service=MagicMock(), tools={}, event_emitter=MagicMock())
+    agent._runtime_state = FindingRuntimeState(
+        plan=AuditPlan(focus_vulnerabilities=["idor"]),
+        coverage=CoverageMap(entry_points=["app/api/uploads.py:11"]),
+        phase="report_finalization",
+        phase_reason="coverage_saturated",
+    )
+
+    assert agent._final_only_mode_active(current_iteration=12) is True
 
 
 def test_analysis_workflow_can_ignore_structured_tool_calls_when_tools_disabled():

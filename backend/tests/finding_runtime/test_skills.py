@@ -80,7 +80,7 @@ def test_runtime_skill_catalog_builds_route_snapshot():
     assert snapshot.route_plan["primary_skill"] == "code-audit-finding"
 
 
-def test_runtime_skill_tool_persists_skill_invocation_and_returns_payload():
+def test_runtime_skill_tool_persists_skill_invocation_and_runtime_state():
     store = build_store()
     session_id = store.create_session(project_id="project-1")
     turn_id = store.open_turn(session_id, model_name="gpt-test")
@@ -98,8 +98,13 @@ def test_runtime_skill_tool_persists_skill_invocation_and_returns_payload():
         )
     )
     snapshot = store.load_session_snapshot(session_id)
+    runtime_state = store.load_runtime_state(session_id)
+    skill_state = runtime_state.agent_states["finding"].invoked_skills["code-audit-finding"]
 
     assert payload.output_payload == {"skill": "code-audit-finding", "content": "body"}
     assert len(snapshot.skill_invocations) == 1
     assert snapshot.skill_invocations[0].skill_ref == "code-audit-finding"
     assert snapshot.skill_invocations[0].status == AuditSkillInvocationStatus.COMPLETED.value
+    assert skill_state.skill_stage == "body"
+    assert skill_state.invocation_count == 1
+    assert skill_state.last_turn_id == turn_id

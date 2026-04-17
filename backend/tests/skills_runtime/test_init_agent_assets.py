@@ -32,6 +32,11 @@ async def test_init_agent_assets_stays_local_and_binds_canonical_skill(tmp_path,
     bindings = json.loads(
         (tmp_path / "skill_library" / "agents" / "finding" / "bindings.json").read_text(encoding="utf-8")
     )
+    installed_index = json.loads(
+        (tmp_path / "skill_library" / ".runtime" / "installed_skills.json").read_text(encoding="utf-8")
+    )
     assert bindings["skills"][0]["slug"] == "code-audit-finding"
     assert bindings["skills"][0]["always_include"] is True
     assert not (tmp_path / "skill_library" / "agents" / "finding" / "code-audit-finding").exists()
+    assert installed_index["skills"][0]["slug"] == "code-audit-finding"
+    assert installed_index["skills"][0]["bound_agents"] == ["finding"]

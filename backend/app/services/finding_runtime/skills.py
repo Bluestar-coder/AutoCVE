@@ -4,11 +4,11 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-from app.models.audit_session import AuditSkillInvocationStatus
 from app.services.agent.agents.finding_skill_router import build_finding_skill_route_message
 from app.services.agent.skill_service import SkillService
 from app.services.finding_runtime.models import RuntimeSkillCatalogSnapshot, ToolExecutionPayload
 from app.services.finding_runtime.tooling import RuntimeTool, ToolExecutionContext
+from app.services.runtime_core.skill_runtime import SkillInvocationRuntime
 
 
 class RuntimeSkillCatalog:
@@ -60,6 +60,12 @@ class RuntimeSkillTool(RuntimeTool):
         self._agent_type = agent_type
         self._user_id = user_id
         self._skill_service = skill_service
+        self._runtime = SkillInvocationRuntime(
+            session_store=session_store,
+            agent_type=agent_type,
+            user_id=user_id,
+            skill_service=skill_service,
+        )
 
     def validate_input(self, raw_input: dict[str, Any]) -> InvokeSkillInput:
         payload = dict(raw_input or {})
@@ -74,53 +80,16 @@ class RuntimeSkillTool(RuntimeTool):
         return True
 
     async def execute(self, parsed_input: InvokeSkillInput, context: ToolExecutionContext) -> ToolExecutionPayload:
-        invocation_id = self._session_store.start_skill_invocation(
+        data = await self._runtime.invoke(
             session_id=context.session_id,
             turn_id=context.turn_id,
             skill_ref=parsed_input.skill_ref,
+            action=parsed_input.action,
+            resource_name=parsed_input.resource_name,
             input_payload=parsed_input.model_dump(),
         )
-        try:
-            if parsed_input.action == "body":
-                data = await self._skill_service.get_skill_body(
-                    self._user_id,
-                    parsed_input.skill_ref,
-                    agent_type=self._agent_type,
-                )
-            elif parsed_input.action == "list_resources":
-                data = await self._skill_service.list_skill_resources(
-                    self._user_id,
-                    parsed_input.skill_ref,
-                    parsed_input.resource_name or "",
-                    agent_type=self._agent_type,
-                )
-            elif parsed_input.action == "read_resource":
-                if not parsed_input.resource_name:
-                    raise ValueError("resource_name is required for read_resource")
-                data = await self._skill_service.get_skill_resource(
-                    self._user_id,
-                    parsed_input.skill_ref,
-                    parsed_input.resource_name,
-                    agent_type=self._agent_type,
-                )
-            else:
-                raise ValueError(f"Unsupported skill action: {parsed_input.action}")
-
-            self._session_store.complete_skill_invocation(
-                invocation_id,
-                status=AuditSkillInvocationStatus.COMPLETED.value,
-                output_payload=data,
-            )
-            return ToolExecutionPayload(
-                content=f"Skill {parsed_input.skill_ref} {parsed_input.action} completed",
-                output_payload=data,
-                metadata={"skill_ref": parsed_input.skill_ref, "action": parsed_input.action},
-            )
-        except Exception as exc:
-            self._session_store.complete_skill_invocation(
-                invocation_id,
-                status=AuditSkillInvocationStatus.FAILED.value,
-                output_payload={},
-                error_message=str(exc),
-            )
-            raise
+        return ToolExecutionPayload(
+            content=f"Skill {parsed_input.skill_ref} {parsed_input.action} completed",
+            output_payload=data,
+            metadata={"skill_ref": parsed_input.skill_ref, "action": parsed_input.action},
+        )

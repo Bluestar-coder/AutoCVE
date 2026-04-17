@@ -1,5 +1,5 @@
 ﻿from fastapi import APIRouter
-from app.api.v1.endpoints import auth, users, projects, tasks, scan, members, config, database, prompts, rules, agent_tasks, embedding_config, ssh_keys, skills, report_templates, audit_sessions
+from app.api.v1.endpoints import auth, users, projects, tasks, scan, members, config, database, prompts, rules, agent_tasks, embedding_config, ssh_keys, skills, report_templates, audit_sessions, vulnerabilities
 
 api_router = APIRouter()
 api_router.include_router(auth.router, prefix="/auth", tags=["auth"])
@@ -18,3 +18,4 @@ api_router.include_router(embedding_config.router, prefix="/embedding", tags=["e
 api_router.include_router(ssh_keys.router, prefix="/ssh-keys", tags=["ssh-keys"])
 api_router.include_router(skills.router, prefix="/skills", tags=["skills"])
 api_router.include_router(report_templates.router, prefix="/report-templates", tags=["report-templates"])
+api_router.include_router(vulnerabilities.router, prefix='/vulnerabilities', tags=['vulnerabilities'])

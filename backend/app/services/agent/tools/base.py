@@ -98,6 +98,21 @@ class AgentTool(ABC):
             },
         }
 
+    def is_concurrency_safe(self, **kwargs) -> bool:
+        """Whether this tool call may run alongside adjacent read-only tool calls."""
+        del kwargs
+        return False
+
+    def concurrency_key(self, **kwargs) -> Optional[str]:
+        """Optional resource key used to serialize conflicting calls within a concurrent batch."""
+        del kwargs
+        return None
+
+    def is_read_only(self, **kwargs) -> bool:
+        """Whether this tool is safe to use while the agent is in plan mode."""
+        del kwargs
+        return False
+
     @abstractmethod
     async def _execute(self, **kwargs) -> ToolResult:
         """执行工具（子类实现）"""

@@ -84,6 +84,18 @@ from .kunlun_tool import KunlunMTool, KunlunRuleListTool, KunlunPluginTool
 
 # 🔥 新增：通用代码执行工具 (LLM 驱动的 Fuzzing Harness)
 from .run_code import RunCodeTool, ExtractFunctionTool
+from .interaction_agent_tools import (
+    TodoWriteTool,
+    AskUserTool,
+    EnterPlanModeTool,
+    ExitPlanModeTool,
+)
+from .shared_catalog import (
+    build_shared_agent_tool_catalog,
+    build_agent_skill_tools,
+    build_agent_tool_catalog,
+    shared_skill_library_roots,
+)
 
 __all__ = [
     # 基础
@@ -172,6 +184,14 @@ __all__ = [
     # 🔥 通用代码执行工具 (LLM 驱动的 Fuzzing Harness)
     "RunCodeTool",
     "ExtractFunctionTool",
+    "TodoWriteTool",
+    "AskUserTool",
+    "EnterPlanModeTool",
+    "ExitPlanModeTool",
+    "build_shared_agent_tool_catalog",
+    "build_agent_skill_tools",
+    "build_agent_tool_catalog",
+    "shared_skill_library_roots",
     "SkillBodyTool",
     "SkillResourceTool",
 ]

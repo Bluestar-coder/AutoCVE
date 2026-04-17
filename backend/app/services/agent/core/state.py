@@ -89,6 +89,9 @@ class AgentState(BaseModel):
     # ============ 最终结果 ============
     final_result: Optional[Dict[str, Any]] = None
     
+    # ============ ????????? ============
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+    
     # ============ 统计信息 ============
     total_tokens: int = 0
     tool_calls: int = 0

@@ -111,6 +111,13 @@ class WorkflowStep:
     final_answer: Optional[Dict[str, Any]] = None
 
 
+@dataclass
+class PreparedToolInvocation:
+    invocation: ToolInvocation
+    is_concurrency_safe: bool = False
+    concurrency_key: Optional[str] = None
+
+
 class AnalysisWorkflowAgent(BaseAgent):
     finding_origin = "analysis"
     evidence_type = "source-analysis"
@@ -234,22 +241,105 @@ class AnalysisWorkflowAgent(BaseAgent):
             return [ToolInvocation(action=step.action, action_input=step.action_input or {})]
         return []
 
-    async def _execute_step_actions(self, step: WorkflowStep, failed_tool_calls: Dict[str, int]) -> str:
-        observations: List[str] = []
-        for index, invocation in enumerate(self._iter_step_actions(step), start=1):
-            await self.emit_llm_action(invocation.action, invocation.action_input)
-            tool_call_key = f"{invocation.action}:{json.dumps(invocation.action_input or {}, sort_keys=True)}"
-            observation = await self.execute_tool(invocation.action, invocation.action_input or {})
-            if isinstance(observation, str) and "Error" in observation:
-                failed_tool_calls[tool_call_key] = failed_tool_calls.get(tool_call_key, 0) + 1
-                if failed_tool_calls[tool_call_key] >= 3:
-                    observation += "\nRepeated tool failure detected. Switch tools, narrow the scope, or produce Final Answer."
-                    failed_tool_calls[tool_call_key] = 0
-            else:
-                failed_tool_calls.pop(tool_call_key, None)
-            observations.append(
-                f"{index}. {invocation.action}({json.dumps(invocation.action_input or {}, ensure_ascii=False, sort_keys=True)}) =>\n{observation}"
+    def _prepare_step_actions(self, step: WorkflowStep) -> List[PreparedToolInvocation]:
+        prepared: List[PreparedToolInvocation] = []
+        for invocation in self._iter_step_actions(step):
+            tool = self.tools.get(invocation.action)
+            is_concurrency_safe = False
+            concurrency_key: Optional[str] = None
+            if tool is not None:
+                action_input = invocation.action_input or {}
+                try:
+                    is_concurrency_safe = bool(tool.is_concurrency_safe(**action_input))
+                except Exception:
+                    is_concurrency_safe = False
+                if is_concurrency_safe:
+                    try:
+                        raw_key = tool.concurrency_key(**action_input)
+                        concurrency_key = str(raw_key).strip() or None if raw_key is not None else None
+                    except Exception:
+                        concurrency_key = None
+            prepared.append(
+                PreparedToolInvocation(
+                    invocation=invocation,
+                    is_concurrency_safe=is_concurrency_safe,
+                    concurrency_key=concurrency_key,
+                )
             )
+        return prepared
+
+    @staticmethod
+    def _partition_prepared_actions(prepared_actions: List[PreparedToolInvocation]) -> List[tuple[bool, List[PreparedToolInvocation]]]:
+        batches: List[tuple[bool, List[PreparedToolInvocation]]] = []
+        active_keys: set[str] = set()
+        for prepared in prepared_actions:
+            if prepared.is_concurrency_safe:
+                key = prepared.concurrency_key
+                can_join_batch = bool(batches and batches[-1][0] and (not key or key not in active_keys))
+                if can_join_batch:
+                    batches[-1][1].append(prepared)
+                    if key:
+                        active_keys.add(key)
+                    continue
+                batches.append((True, [prepared]))
+                active_keys = {key} if key else set()
+                continue
+            batches.append((False, [prepared]))
+            active_keys = set()
+        return batches
+
+    @staticmethod
+    def _render_action_observation(
+        *,
+        index: int,
+        invocation: ToolInvocation,
+        observation: str,
+        failed_tool_calls: Dict[str, int],
+    ) -> str:
+        tool_call_key = f"{invocation.action}:{json.dumps(invocation.action_input or {}, sort_keys=True)}"
+        rendered_observation = observation
+        if isinstance(rendered_observation, str) and "Error" in rendered_observation:
+            failed_tool_calls[tool_call_key] = failed_tool_calls.get(tool_call_key, 0) + 1
+            if failed_tool_calls[tool_call_key] >= 3:
+                rendered_observation += "\nRepeated tool failure detected. Switch tools, narrow the scope, or produce Final Answer."
+                failed_tool_calls[tool_call_key] = 0
+        else:
+            failed_tool_calls.pop(tool_call_key, None)
+        return (
+            f"{index}. {invocation.action}({json.dumps(invocation.action_input or {}, ensure_ascii=False, sort_keys=True)}) =>\n"
+            f"{rendered_observation}"
+        )
+
+    async def _execute_step_actions(self, step: WorkflowStep, failed_tool_calls: Dict[str, int]) -> str:
+        prepared_actions = self._prepare_step_actions(step)
+        observations: List[str] = []
+
+        for is_concurrency_safe, batch in self._partition_prepared_actions(prepared_actions):
+            for prepared in batch:
+                await self.emit_llm_action(prepared.invocation.action, prepared.invocation.action_input)
+
+            if is_concurrency_safe:
+                raw_observations = await asyncio.gather(
+                    *[
+                        self.execute_tool(prepared.invocation.action, prepared.invocation.action_input or {})
+                        for prepared in batch
+                    ]
+                )
+            else:
+                raw_observations = [
+                    await self.execute_tool(prepared.invocation.action, prepared.invocation.action_input or {})
+                    for prepared in batch
+                ]
+
+            for prepared, observation in zip(batch, raw_observations):
+                observations.append(
+                    self._render_action_observation(
+                        index=len(observations) + 1,
+                        invocation=prepared.invocation,
+                        observation=observation,
+                        failed_tool_calls=failed_tool_calls,
+                    )
+                )
 
         if not observations:
             return ""

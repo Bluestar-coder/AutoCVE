@@ -17,6 +17,8 @@ from app.models.audit_session import (
     AuditToolCall,
 )
 from app.services.finding_runtime.models import RuntimeMemoryRecord, RuntimeSessionSnapshot, RuntimeSessionState, TranscriptItem
+from app.services.finding_runtime.query_state import QueryLoopState
+from app.services.runtime_core.session_state import SessionRuntimeState as SharedSessionRuntimeState
 
 
 class AuditSessionStore:
@@ -40,6 +42,7 @@ class AuditSessionStore:
                 state=RuntimeSessionState.PENDING.value,
                 system_prompt=system_prompt,
                 recon_payload=recon_payload or {},
+                runtime_state_json={},
             )
             db.add(session)
             db.commit()
@@ -61,6 +64,34 @@ class AuditSessionStore:
                 raise LookupError(f"Unknown audit session: {session_id}")
             session.system_prompt = system_prompt
             db.commit()
+
+    def replace_runtime_state(self, session_id: str, runtime_state: SharedSessionRuntimeState | dict) -> None:
+        payload = runtime_state.model_dump(mode="json") if isinstance(runtime_state, SharedSessionRuntimeState) else dict(runtime_state or {})
+        payload["session_id"] = session_id
+        with self._session_factory() as db:
+            session = db.get(AuditSession, session_id)
+            if session is None:
+                raise LookupError(f"Unknown audit session: {session_id}")
+            session.runtime_state_json = payload
+            db.commit()
+
+    def load_runtime_state(self, session_id: str) -> SharedSessionRuntimeState:
+        with self._session_factory() as db:
+            session = db.get(AuditSession, session_id)
+            if session is None:
+                raise LookupError(f"Unknown audit session: {session_id}")
+            payload = dict(session.runtime_state_json or {})
+            payload["session_id"] = session_id
+            return SharedSessionRuntimeState.model_validate(payload)
+
+    def save_query_loop_state(self, session_id: str, state: QueryLoopState) -> None:
+        runtime_state = self.load_runtime_state(session_id)
+        runtime_state.metadata["query_loop"] = state.to_payload()
+        self.replace_runtime_state(session_id, runtime_state)
+
+    def load_query_loop_state(self, session_id: str) -> QueryLoopState:
+        runtime_state = self.load_runtime_state(session_id)
+        return QueryLoopState.from_payload(runtime_state.metadata.get("query_loop") or {})
 
     def append_message(self, session_id: str, item: TranscriptItem) -> str:
         with self._session_factory() as db:
@@ -400,3 +431,5 @@ class AuditSessionStore:
     def _next_sequence(db, model, field, session_id: str) -> int:
         current = db.scalar(select(func.max(model.sequence)).where(field == session_id))
         return (current or 0) + 1
+
+

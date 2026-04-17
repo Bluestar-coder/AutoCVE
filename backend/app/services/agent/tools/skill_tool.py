@@ -57,6 +57,10 @@ class SkillBodyTool(AgentTool):
     def args_schema(self):
         return SkillBodyInput
 
+    def is_read_only(self, **kwargs) -> bool:
+        del kwargs
+        return True
+
     async def _execute(self, skill_ref: Optional[str] = None, **kwargs) -> ToolResult:
         try:
             resolved_skill_ref = skill_ref or DEFAULT_SKILL_REF
@@ -93,6 +97,10 @@ class SkillResourceTool(AgentTool):
     @property
     def args_schema(self):
         return SkillResourceInput
+
+    def is_read_only(self, **kwargs) -> bool:
+        del kwargs
+        return True
 
     async def _execute(
         self,

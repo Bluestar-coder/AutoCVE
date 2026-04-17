@@ -4,6 +4,7 @@ import json
 import os
 import re
 import shutil
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 from urllib.parse import urlparse
@@ -56,6 +57,16 @@ class SkillFileService:
         return root
 
     @classmethod
+    def runtime_root(cls) -> Path:
+        root = cls.library_root() / ".runtime"
+        root.mkdir(parents=True, exist_ok=True)
+        return root
+
+    @classmethod
+    def installed_skills_index_file(cls) -> Path:
+        return cls.runtime_root() / "installed_skills.json"
+
+    @classmethod
     def agents_root(cls) -> Path:
         root = cls.library_root() / "agents"
         root.mkdir(parents=True, exist_ok=True)
@@ -76,6 +87,10 @@ class SkillFileService:
             return ""
         normalized = relative_path.replace("/", "\\")
         return f"{host_root}\\{normalized}" if normalized else host_root
+
+    @classmethod
+    def _timestamp(cls) -> str:
+        return datetime.now(timezone.utc).isoformat()
 
     @classmethod
     def slugify(cls, value: str) -> str:
@@ -112,9 +127,7 @@ class SkillFileService:
 
     @classmethod
     def agent_skill_dir(cls, agent_type: str, slug: str) -> Path:
-        path = cls.agent_root(agent_type) / cls.slugify(slug)
-        path.mkdir(parents=True, exist_ok=True)
-        return path
+        return cls.agent_root(agent_type) / cls.slugify(slug)
 
     @classmethod
     def _build_paths(cls, base_dir: Path, file_name: str = "SKILL.md") -> Dict[str, str]:
@@ -190,6 +203,7 @@ class SkillFileService:
         match_config: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         normalized_slug = cls.slugify(slug)
+        paths = cls._build_paths(cls.skill_dir(normalized_slug))
         return {
             "id": f"{agent_type}:{normalized_slug}",
             "skill_id": normalized_slug,
@@ -202,12 +216,14 @@ class SkillFileService:
             "match_config": match_config or {},
             "bindings_file": str(cls.bindings_file(agent_type)),
             "skill_file": str(cls.skill_file(normalized_slug)),
+            "workspace_relative_path": paths["workspace_relative_path"],
+            "skill_root": paths["skill_root"],
         }
 
     @classmethod
     def _write_agent_binding_mirror(cls, binding: Dict[str, Any]) -> None:
-        mirror_dir = cls.agent_skill_dir(binding["agent_type"], binding["slug"])
-        cls._write_json(mirror_dir / "binding.json", binding)
+        del binding
+        return None
 
     @classmethod
     def _remove_agent_binding_mirror(cls, agent_type: str, slug: str) -> None:
@@ -237,11 +253,13 @@ class SkillFileService:
         content = skill_file.read_text(encoding="utf-8")
         frontmatter, body = parse_frontmatter(content)
         raw_metadata = cls._read_json(cls.metadata_file(normalized_slug), {})
-        nested_metadata = raw_metadata.get("metadata", {}) if isinstance(raw_metadata, dict) else {}
+        if not isinstance(raw_metadata, dict):
+            raw_metadata = {}
+        nested_metadata = raw_metadata.get("metadata", {}) if isinstance(raw_metadata.get("metadata"), dict) else {}
         paths = cls._build_paths(skill_dir)
         extension_manifest = raw_metadata.get("extension_manifest") or cls._build_extension_manifest(skill_dir)
         metadata_json = {
-            **(nested_metadata if isinstance(nested_metadata, dict) else {}),
+            **nested_metadata,
             **paths,
             "folder_path": str(skill_dir),
             "bindings_file": str(cls.aggregated_bindings_file(normalized_slug)),
@@ -273,10 +291,44 @@ class SkillFileService:
             "skill_body": body,
             "extension_manifest": extension_manifest,
             "extension_payload": raw_metadata.get("extension_payload", {}) or {},
+            "installed_at": raw_metadata.get("installed_at"),
+            "updated_at": raw_metadata.get("updated_at"),
         }
 
     @classmethod
+    def _build_installed_record(cls, slug: str, existing: Dict[str, Any] | None = None) -> Dict[str, Any]:
+        skill = cls._read_skill_payload(slug)
+        existing = existing or {}
+        bindings = skill.get("bindings", []) or []
+        return {
+            "slug": skill["slug"],
+            "name": skill["name"],
+            "source_type": skill.get("source_type", "manual"),
+            "source_url": skill.get("source_url"),
+            "skill_file": skill["skill_file"],
+            "workspace_relative_path": skill["metadata_json"].get("workspace_relative_path"),
+            "is_system": skill.get("is_system", False),
+            "is_active": skill.get("is_active", True),
+            "bound_agents": sorted({str(binding.get("agent_type")) for binding in bindings if binding.get("agent_type")}),
+            "bindings": bindings,
+            "installed_at": existing.get("installed_at") or skill.get("installed_at") or cls._timestamp(),
+            "updated_at": cls._timestamp(),
+        }
+
+    @classmethod
+    def _refresh_installed_index(cls) -> None:
+        existing_payload = cls._read_json(cls.installed_skills_index_file(), {"skills": []})
+        existing_by_slug = {
+            str(item.get("slug")): item
+            for item in existing_payload.get("skills", [])
+            if isinstance(item, dict) and str(item.get("slug", "")).strip()
+        }
+        records = [cls._build_installed_record(slug, existing_by_slug.get(slug)) for slug in cls.list_skill_slugs()]
+        cls._write_json(cls.installed_skills_index_file(), {"skills": sorted(records, key=lambda item: item["slug"])})
+
+    @classmethod
     def ensure_agent_roots(cls) -> None:
+        cls.runtime_root()
         for agent in AGENT_TYPES:
             cls.ensure_agent_bindings(agent)
 
@@ -313,11 +365,11 @@ class SkillFileService:
         description: Optional[str],
         content: Optional[str],
         tags: Optional[List[str]],
-        source_type: str,
-        source_url: Optional[str],
-        metadata_json: Optional[Dict[str, Any]],
-        is_system: bool,
-        is_active: bool,
+        source_type: str = "manual",
+        source_url: Optional[str] = None,
+        metadata_json: Optional[Dict[str, Any]] = None,
+        is_system: bool = False,
+        is_active: bool = True,
         extension_payload: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         normalized_slug = cls.slugify(slug)
@@ -331,6 +383,8 @@ class SkillFileService:
         skill_text = f"{cls._frontmatter_block(frontmatter)}\n\n{body}\n"
         cls.skill_file(normalized_slug).write_text(skill_text, encoding="utf-8")
 
+        existing_metadata = cls._read_json(cls.metadata_file(normalized_slug), {})
+        installed_at = existing_metadata.get("installed_at") if isinstance(existing_metadata, dict) else None
         payload = {
             "name": name,
             "slug": normalized_slug,
@@ -343,6 +397,8 @@ class SkillFileService:
             "extension_payload": extension_payload or {},
             "is_system": bool(is_system),
             "is_active": bool(is_active),
+            "installed_at": installed_at or cls._timestamp(),
+            "updated_at": cls._timestamp(),
         }
         cls._write_json(cls.metadata_file(normalized_slug), payload)
         cls.sync_all()
@@ -365,6 +421,7 @@ class SkillFileService:
         metadata = cls._read_json(target_dir / "metadata.json", {})
         if isinstance(metadata, dict):
             metadata["slug"] = new_slug
+            metadata["updated_at"] = cls._timestamp()
             cls._write_json(target_dir / "metadata.json", metadata)
 
         for agent_type in AGENT_TYPES:
@@ -372,24 +429,20 @@ class SkillFileService:
             changed = False
             for item in payload.get("skills", []):
                 if cls.slugify(item.get("slug", "")) == current_slug:
-                    item["slug"] = new_slug
-                    item["skill_id"] = new_slug
-                    item["id"] = f"{agent_type}:{new_slug}"
-                    item["skill_file"] = str(cls.skill_file(new_slug))
+                    item.update(cls._normalize_binding(
+                        agent_type,
+                        new_slug,
+                        enabled=bool(item.get("enabled", True)),
+                        always_include=bool(item.get("always_include", False)),
+                        sort_order=int(item.get("sort_order", 0)),
+                        match_keywords=item.get("match_keywords", []),
+                        match_config=item.get("match_config", {}),
+                    ))
                     changed = True
             if changed:
                 cls._write_json(cls.bindings_file(agent_type), payload)
-            mirror_dir = cls.agent_root(agent_type) / current_slug
-            if mirror_dir.exists():
-                mirror_dir.rename(cls.agent_root(agent_type) / new_slug)
-                binding_file = cls.agent_root(agent_type) / new_slug / "binding.json"
-                binding_payload = cls._read_json(binding_file, {})
-                if isinstance(binding_payload, dict):
-                    binding_payload["slug"] = new_slug
-                    binding_payload["skill_id"] = new_slug
-                    binding_payload["id"] = f"{agent_type}:{new_slug}"
-                    binding_payload["skill_file"] = str(cls.skill_file(new_slug))
-                    cls._write_json(binding_file, binding_payload)
+            cls._remove_agent_binding_mirror(agent_type, current_slug)
+            cls._remove_agent_binding_mirror(agent_type, new_slug)
 
         cls.sync_all()
         return cls.read_skill(new_slug)
@@ -397,11 +450,12 @@ class SkillFileService:
     @classmethod
     def delete_skill(cls, slug: str) -> None:
         normalized_slug = cls.slugify(slug)
+        for agent_type in AGENT_TYPES:
+            cls.delete_binding(agent_type, normalized_slug, ignore_missing=True)
         skill_dir = cls.library_root() / normalized_slug
         if skill_dir.exists():
             shutil.rmtree(skill_dir)
-        for agent_type in AGENT_TYPES:
-            cls.delete_binding(agent_type, normalized_slug, ignore_missing=True)
+        cls.sync_all()
 
     @classmethod
     def get_agent_bindings(cls, agent_type: str) -> Dict[str, Any]:
@@ -455,7 +509,7 @@ class SkillFileService:
             payload["skills"].append(binding)
         payload["skills"] = sorted(payload["skills"], key=lambda item: (item["sort_order"], item["slug"]))
         cls._write_json(cls.bindings_file(agent_type), payload)
-        cls._write_agent_binding_mirror(binding)
+        cls._remove_agent_binding_mirror(agent_type, normalized_slug)
         cls.sync_all()
         return binding
 
@@ -491,6 +545,7 @@ class SkillFileService:
         cls.ensure_agent_roots()
         for slug in cls.list_skill_slugs():
             cls._write_json(cls.aggregated_bindings_file(slug), {"skills": cls._collect_bindings_for_slug(slug)})
+        cls._refresh_installed_index()
 
     @classmethod
     async def import_github_skill(cls, repo_url: str) -> Dict[str, Any]:

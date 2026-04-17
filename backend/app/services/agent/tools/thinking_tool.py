@@ -63,6 +63,10 @@ class ThinkTool(AgentTool):
     @property
     def args_schema(self):
         return ThinkInput
+
+    def is_read_only(self, **kwargs) -> bool:
+        del kwargs
+        return True
     
     async def _execute(
         self,
@@ -140,6 +144,10 @@ class ReflectTool(AgentTool):
     @property
     def args_schema(self):
         return None
+
+    def is_read_only(self, **kwargs) -> bool:
+        del kwargs
+        return True
     
     async def _execute(
         self,

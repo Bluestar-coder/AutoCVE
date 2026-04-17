@@ -4,6 +4,8 @@ import json
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
+import yaml
+
 from .models import SkillEntry
 
 
@@ -17,22 +19,41 @@ def parse_frontmatter(content: str) -> Tuple[Dict[str, Any], str]:
 
     raw_meta = text[4:end].strip()
     body = text[end + 5 :].lstrip()
-    metadata: Dict[str, Any] = {}
-    for line in raw_meta.splitlines():
-        if ":" not in line:
-            continue
-        key, value = line.split(":", 1)
-        key = key.strip().lower()
-        value = value.strip()
-        if not key:
-            continue
-        if value.startswith("[") and value.endswith("]"):
-            metadata[key] = [item.strip().strip("'\"") for item in value[1:-1].split(",") if item.strip()]
-        elif value.lower() in {"true", "false"}:
-            metadata[key] = value.lower() == "true"
-        else:
-            metadata[key] = value.strip("'\"")
+    try:
+        loaded = yaml.safe_load(raw_meta) or {}
+    except Exception:  # noqa: BLE001
+        return {}, text
+
+    if not isinstance(loaded, dict):
+        return {}, body
+
+    metadata = {
+        str(key).strip().lower(): value
+        for key, value in loaded.items()
+        if str(key).strip()
+    }
     return metadata, body
+
+
+def _frontmatter_get(frontmatter: Dict[str, Any], *keys: str) -> Any:
+    for key in keys:
+        if key in frontmatter:
+            return frontmatter[key]
+    return None
+
+
+def _coerce_string(value: Any) -> str | None:
+    if value is None:
+        return None
+    return str(value)
+
+
+def _coerce_string_list(value: Any) -> List[str]:
+    if isinstance(value, list):
+        return [str(item) for item in value if item is not None]
+    if value is None:
+        return []
+    return [str(value)]
 
 
 def _read_json(path: Path, default: Any) -> Any:
@@ -97,6 +118,8 @@ def discover_skill_entries(library_root: Path, project_root: Path | None = None)
         content = skill_file.read_text(encoding="utf-8")
         frontmatter, body = parse_frontmatter(content)
         raw_metadata = _read_json(child / "metadata.json", {})
+        if not isinstance(raw_metadata, dict):
+            raw_metadata = {}
         nested_metadata = raw_metadata.get("metadata", {}) if isinstance(raw_metadata, dict) else {}
         paths = _build_paths(child, project_root)
 
@@ -114,6 +137,8 @@ def discover_skill_entries(library_root: Path, project_root: Path | None = None)
             "bindings_file": str(child / "bindings.json"),
         }
 
+        user_invocable = _frontmatter_get(frontmatter, "user-invocable", "user_invocable")
+
         entries.append(
             SkillEntry(
                 slug=child.name,
@@ -122,6 +147,22 @@ def discover_skill_entries(library_root: Path, project_root: Path | None = None)
                 skill_file=str(skill_file),
                 folder_path=str(child),
                 tags=[str(tag) for tag in tags],
+                when_to_use=_coerce_string(_frontmatter_get(frontmatter, "when_to_use", "when-to-use")),
+                allowed_tools=_coerce_string_list(_frontmatter_get(frontmatter, "allowed-tools", "allowed_tools")),
+                argument_hint=_coerce_string(_frontmatter_get(frontmatter, "argument-hint", "argument_hint")),
+                argument_names=_coerce_string_list(_frontmatter_get(frontmatter, "arguments", "argument_names")),
+                version=_coerce_string(frontmatter.get("version")),
+                model=_coerce_string(frontmatter.get("model")),
+                disable_model_invocation=bool(
+                    _frontmatter_get(frontmatter, "disable-model-invocation", "disable_model_invocation") or False
+                ),
+                user_invocable=True if user_invocable is None else bool(user_invocable),
+                execution_context=_coerce_string(frontmatter.get("context")),
+                agent=_coerce_string(frontmatter.get("agent")),
+                effort=_coerce_string(frontmatter.get("effort")),
+                shell=frontmatter.get("shell") if isinstance(frontmatter.get("shell"), dict) else None,
+                hooks=frontmatter.get("hooks") if isinstance(frontmatter.get("hooks"), dict) else {},
+                paths=_coerce_string_list(frontmatter.get("paths")),
                 frontmatter=frontmatter,
                 metadata_json=metadata_json,
                 source_type=str(raw_metadata.get("source_type") or nested_metadata.get("source_type") or "manual"),

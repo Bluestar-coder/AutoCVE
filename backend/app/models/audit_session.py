@@ -45,6 +45,7 @@ class AuditSession(Base):
     state = Column(String(32), nullable=False, default="pending")
     system_prompt = Column(Text, nullable=True)
     recon_payload = Column(JSON, nullable=True)
+    runtime_state_json = Column(JSON, nullable=False, default=dict)
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
 

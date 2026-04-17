@@ -12,6 +12,20 @@ class SkillEntry:
     skill_file: str
     folder_path: str
     tags: List[str] = field(default_factory=list)
+    when_to_use: Optional[str] = None
+    allowed_tools: List[str] = field(default_factory=list)
+    argument_hint: Optional[str] = None
+    argument_names: List[str] = field(default_factory=list)
+    version: Optional[str] = None
+    model: Optional[str] = None
+    disable_model_invocation: bool = False
+    user_invocable: bool = True
+    execution_context: Optional[str] = None
+    agent: Optional[str] = None
+    effort: Optional[str] = None
+    shell: Optional[Dict[str, Any]] = None
+    hooks: Dict[str, Any] = field(default_factory=dict)
+    paths: List[str] = field(default_factory=list)
     frontmatter: Dict[str, Any] = field(default_factory=dict)
     metadata_json: Dict[str, Any] = field(default_factory=dict)
     source_type: str = "manual"
@@ -41,6 +55,9 @@ class SkillRoutePlan:
     mandatory_reads: List[str] = field(default_factory=list)
     recommended_reads: List[str] = field(default_factory=list)
     selection_reason: List[str] = field(default_factory=list)
+    startup_reads: List[str] = field(default_factory=list)
+    deferred_skills: List[str] = field(default_factory=list)
+    deferred_skill_reads: List[str] = field(default_factory=list)
 
 
 @dataclass(slots=True)

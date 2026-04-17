@@ -1,4 +1,5 @@
-import { useMemo, useState } from 'react';
+﻿import { useMemo, useState } from 'react';
+import type { ReactNode } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import {
   Activity,
@@ -14,6 +15,7 @@ import {
   MessageSquare,
   Settings,
   Shield,
+  ShieldAlert,
   Trash2,
   UserCircle,
   X,
@@ -24,7 +26,7 @@ import routes from '@/app/routes';
 import { Button } from '@/components/ui/button';
 import { version } from '../../../package.json';
 
-const routeIcons: Record<string, React.ReactNode> = {
+const routeIcons: Record<string, ReactNode> = {
   '/': <Bot className="h-[18px] w-[18px]" />,
   '/dashboard': <LayoutDashboard className="h-[18px] w-[18px]" />,
   '/projects': <FolderGit2 className="h-[18px] w-[18px]" />,
@@ -34,6 +36,7 @@ const routeIcons: Record<string, React.ReactNode> = {
   '/prompts': <MessageSquare className="h-[18px] w-[18px]" />,
   '/skills': <BookOpen className="h-[18px] w-[18px]" />,
   '/report-templates': <FileText className="h-[18px] w-[18px]" />,
+  '/vulnerabilities': <ShieldAlert className="h-[18px] w-[18px]" />,
   '/flow-debugger': <Activity className="h-[18px] w-[18px]" />,
   '/admin': <Settings className="h-[18px] w-[18px]" />,
   '/recycle-bin': <Trash2 className="h-[18px] w-[18px]" />,
@@ -167,3 +170,4 @@ export default function Sidebar({ collapsed, setCollapsed }: SidebarProps) {
     </>
   );
 }
+

@@ -1,6 +1,6 @@
 """
-AuditAI Agent 閻庡銈庡悁濞寸姾顕ф慨?API
-闁糕晞妗ㄧ花?LangGraph 闁?Agent 閻庡銈庡悁
+AuditAI Agent 闂佽楠搁婵嬪Χ鎼粹剝鍊庡┑鐐差嚟婵箖顢氳閹?API
+闂備胶纭堕弲鐐差浖閵娧嗗С?LangGraph 闂?Agent 闂佽楠搁婵嬪Χ鎼粹剝鍊?
 """
 
 import asyncio
@@ -11,6 +11,7 @@ import os
 import re
 import zipfile
 import shutil
+import hashlib
 from typing import Any, List, Optional, Dict, Set
 from datetime import datetime, timezone
 from uuid import uuid4
@@ -24,13 +25,14 @@ from sqlalchemy.orm import selectinload
 from pydantic import BaseModel, Field
 
 from app.api import deps
+from app.api.v1.endpoints.config import _normalize_workflow_config, WORKFLOW_AGENT_TYPES, WORKFLOW_LOCKED_AGENTS
 from app.db.session import get_db, async_session_factory
 from app.models.agent_task import (
     AgentTask, AgentEvent, AgentFinding, AgentTreeNode,
     AgentTaskStatus, AgentTaskPhase, AgentEventType,
     VulnerabilitySeverity, FindingStatus,
 )
-from app.models.audit_session import AuditSession
+from app.models.audit_session import AuditSession, AuditSessionMessage
 from app.services.finding_runtime.config import FindingRuntimeStack, coerce_finding_runtime_stack
 from app.models.project import Project
 from app.models.user import User
@@ -39,6 +41,7 @@ from app.services.agent.event_manager import EventManager
 from app.services.agent.streaming import StreamHandler, StreamEvent, StreamEventType
 from app.services.git_ssh_service import GitSSHOperations
 from app.services.skill_file_service import SkillFileService
+from app.services.runtime_core.runtime_session_checkpoint_store import RuntimeSessionCheckpointStore
 from app.core.config import settings
 from app.core.encryption import decrypt_sensitive_data
 
@@ -48,7 +51,7 @@ router = APIRouter()
 # Running task registry kept for cancellation and legacy task lookups.
 _running_tasks: Dict[str, Any] = {}
 
-# 妫ｅ啯鏆?閺夆晜鍔橀、鎴炵▔椤撶姵鐣?asyncio Tasks闁挎稑鐗忛弫銈嗙鎼粹€崇箒闁告帟娉涜ぐ鍥р槈閸剛绀?
+# 婵☆偓绲介崯顖炲汲?闂佸搫顦弲婊堝礉濮椻偓閵嗕線骞嬮悙纰樻灃濡炪倖鎸炬慨鐢告偩?asyncio Tasks闂備焦瀵х粙鎴︽偋韫囨稑鏋侀柕鍫濇椤╂煡骞栫划鍏夊亾瀹曞洨鐣抽梻浣告啞鐢喎鈻斿☉婧夸汗闁搞儜鈧Σ鍫ユ煕椤愵偄澧扮紒鈧?
 _running_asyncio_tasks: Dict[str, asyncio.Task] = {}
 
 
@@ -71,6 +74,8 @@ class AgentTaskCreate(BaseModel):
         description="Verification mode: analysis_only, sandbox, or generate_poc",
     )
 
+    version_label: str = Field(..., description="Human-entered version label")
+    version_tag: Optional[str] = Field(None, description="Optional repository tag")
     branch_name: Optional[str] = Field(None, description="Repository branch name")
     exclude_patterns: Optional[List[str]] = Field(
         default=["node_modules", "__pycache__", ".git", "*.min.js"],
@@ -93,55 +98,60 @@ class AgentTaskResponse(BaseModel):
     status: str
     current_phase: Optional[str]
     current_step: Optional[str] = None
+    version_label: Optional[str] = None
+    version_tag: Optional[str] = None
+    branch_name: Optional[str] = None
+    commit_sha: Optional[str] = None
+    repository_url_snapshot: Optional[str] = None
     
-    # 閺夆晜绋戠€瑰磭绱掗悢娲诲悁
+    # 闂佸搫顦弲婊呯矙閹寸姭鍋撻悷鎵紞缂佽鲸甯￠幃銏犆虹拠鍙夊€?
     total_files: int = 0
     indexed_files: int = 0
     analyzed_files: int = 0
     files_with_findings: int = 0
     total_chunks: int = 0
     
-    # Agent 缂備胶鍠曢?
+    # Agent 缂傚倸鍊烽懗鍫曞窗閺囥埄鏁?
     total_iterations: int = 0
     tool_calls_count: int = 0
     tokens_used: int = 0
     
-    # 闁告瑦鍨归獮鍥╃磼閻旀椿鍚€闁挎稑鐗嗛崥瀣偓褰掆偓娑溾拡缂佸绉撮幊锟犲触瀹ュ繒绀?
+    # 闂備礁鎲￠悷锕傚垂瑜版帞宓侀柛銉㈡櫇绾惧ジ鏌ｉ弮鈧鍧楀触閳ь剟姊洪幐搴ｂ槈闁绘妫濆畷銉р偓锝庡厴閸嬫捁銇愰幒鍡椾壕婵炴垶澹曢幏锛勭磽娴ｅ壊妲哥紒澶嬫尦楠炲﹪鏁撻悩鑼缎曢悗骞垮劚缁绘帞绮?
     findings_count: int = 0
-    total_findings: int = 0  # 闁稿繒鍘ч鎰偓娑欘殕椤?
+    total_findings: int = 0  # 闂備胶顭堢换鎺楀储瑜旈、娆撳箛椤旂懓浜炬繛鎴炵懐濞堟洘銇?
     verified_count: int = 0
-    verified_findings: int = 0  # 闁稿繒鍘ч鎰偓娑欘殕椤?
+    verified_findings: int = 0  # 闂備胶顭堢换鎺楀储瑜旈、娆撳箛椤旂懓浜炬繛鎴炵懐濞堟洘銇?
     false_positive_count: int = 0
     
-    # 濞戞挶鍎甸崳鍝ョ矙鐎ｎ亜顔婄紓浣哄枙椤?
+    # 濠电偞鍨堕幐鍫曞磿閻㈢闂柛婵勫劤閻瑩鎮楅敐搴濈盎妞ゆ柨锕︾槐鎾存媴閸濆嫭鐏嗗?
     critical_count: int = 0
     high_count: int = 0
     medium_count: int = 0
     low_count: int = 0
     
-    # 閻犲洤瀚崹?
+    # 闂佽崵濮村ú銈団偓姘煎墴瀹?
     quality_score: float = 0.0
     security_score: Optional[float] = None
     
     # Progress metrics
     progress_percentage: float = 0.0
     
-    # 闁哄啫鐖煎Λ?
+    # 闂備礁鎼崯顐︽偉閻撳宫?
     created_at: datetime
     started_at: Optional[datetime] = None
     completed_at: Optional[datetime] = None
     
-    # 闂佹澘绉堕悿?
+    # 闂傚倷鐒﹀妯肩矓閸洘鍋?
     audit_scope: Optional[dict] = None
     target_vulnerabilities: Optional[List[str]] = None
     verification_level: Optional[str] = None
     exclude_patterns: Optional[List[str]] = None
     target_files: Optional[List[str]] = None
     
-    # 闂佹寧鐟ㄩ銈嗙┍閳╁啩绱?
+    # 闂傚倷鐒︾€笛囨偡閵娾晩鏁嬮柕鍫濇閳瑰秹鏌嶉埡浣告殨缂?
     error_message: Optional[str] = None
     runtime_session_id: Optional[str] = None
-    finding_runtime_stack: str = FindingRuntimeStack.LEGACY.value
+    finding_runtime_stack: str = FindingRuntimeStack.RUNTIME.value
     
     class Config:
         from_attributes = True
@@ -250,19 +260,39 @@ class DebugTraceResponse(BaseModel):
     handoffs: List[Dict[str, Any]]
 
 
-# ============ 闁告艾楠歌ぐ瀛樼鐠囨彃顫ら柟绗涘棭鏀?============
+# ============ 闂備礁鎲￠懝鐐殽濮濆被浜归悗娑欘焽椤╃兘鎮归崶銊ョ祷妞ゎ偁鍊濋弻鐔虹箔濞戞ɑ锛嶉柡鈧?============
 
-# 閺夆晜鍔橀、鎴炵▔椤撶姵鐣遍柛鏂诲妽閳ь兛鐒︽晶鐣屾偘鐏炶姤鐝?
+# 闂佸搫顦弲婊堝礉濮椻偓閵嗕線骞嬮悙纰樻灃濡炪倖鎸炬慨鐢告偩闁秵鐓曢柡鍌濐嚙婵′粙鏌嶈閸忔盯鎮為敂鑺ユ珷闁伙絽鏈崑姗€鎮橀悙璺盒撻柣?
 _running_orchestrators: Dict[str, Any] = {}
-# 閺夆晜鍔橀、鎴炵▔椤撶姵鐣卞ù婊冾儎濞嗐垻绮婚敍鍕€為柛锝庣厜缁辨瑩鎮介妸銈囪壘 SSE 婵炵繝绶ょ槐?
+# 闂佸搫顦弲婊堝礉濮椻偓閵嗕線骞嬮悙纰樻灃濡炪倖鎸炬慨鐢告偩閸楃伝鐟邦煥閸愭儳鍓┑鐐叉閸ㄨ崵鍒掓繝姘櫖闁告洦鍓欓埀顒傚仱閺屾盯鏁愭惔锝呭辅缂備浇椴搁悷鈺呭箖娴犲惟闁靛牆娲╂竟?SSE 婵犵數鍋熺换婵堟閵堝洦顫?
 _running_event_managers: Dict[str, EventManager] = {}
-# 妫ｅ啯鏆?鐎瑰憡褰冭ぐ鍥р槈閸垺鐣卞ù鐘侯嚙婵喖姊块崱妤佸€ら柨娑樼墢閺併倖绂嶆惔鈥愁枀缂傚喚鍠楅幖閿嬫媴濠婂懏鐣遍柛娆愮墬缁夊嘲螞閳ь剟寮婚妷顖滅
+# 婵☆偓绲介崯顖炲汲?闁诲海鎳撻幉陇銇愰崘顓滀汗闁搞儜鈧Σ鍫ユ煕椤愮姴鐏柣锝呭船闇夐柣妯硅閸ゆ瑥鈹戦鎯ф灈婵﹤娼″畷鍗炍旀担绯曞亾閵堝鐓ユ繛鎴烆焽婢с垽鏌℃担闈涒偓鏍矉瀹ュ棙鍎熼柍銉﹀墯閺嬧偓缂傚倸鍊搁崰姘跺窗濡ゅ懎绠归梺鍨儐婵瓨绻濇繝鍌涘櫤闁伙綁浜堕弻娑樷枎閹邦喖顫х紓浣割槸閸㈣尪鐏嬮梺閫炲苯澧寸€殿喖顭锋俊鐑筋敍濠婂拋妲?
 _cancelled_tasks: Set[str] = set()
 
 
 def is_task_cancelled(task_id: str) -> bool:
     """Check whether a task has been cancelled."""
     return task_id in _cancelled_tasks
+
+
+def _merge_task_workflow_config(global_workflow: Optional[Dict[str, Any]], audit_scope: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    merged = _normalize_workflow_config(global_workflow)
+    task_workflow = audit_scope.get("workflow") if isinstance(audit_scope, dict) else None
+    incoming_states = task_workflow.get("agentStates", {}) if isinstance(task_workflow, dict) else {}
+
+    if isinstance(incoming_states, dict):
+        for agent in WORKFLOW_AGENT_TYPES:
+            raw_state = incoming_states.get(agent)
+            if isinstance(raw_state, dict):
+                merged["agentStates"][agent]["enabled"] = bool(raw_state.get("enabled", True))
+            elif isinstance(raw_state, bool):
+                merged["agentStates"][agent]["enabled"] = raw_state
+
+    for agent in WORKFLOW_LOCKED_AGENTS:
+        merged["agentStates"][agent]["enabled"] = True
+        merged["agentStates"][agent]["locked"] = True
+
+    return merged
 
 
 def _resolve_task_runtime_stack(agent_config: Any) -> str:
@@ -273,6 +303,126 @@ def _resolve_task_runtime_stack(agent_config: Any) -> str:
     if raw_value in (None, ""):
         raw_value = getattr(settings, "FINDING_RUNTIME_STACK_DEFAULT", FindingRuntimeStack.LEGACY.value)
     return coerce_finding_runtime_stack(raw_value).value
+async def _restore_agents_from_checkpoints(agents: List[Any]) -> List[Dict[str, Any]]:
+    restored: List[Dict[str, Any]] = []
+    for agent in agents:
+        restore_fn = getattr(agent, "restore_runtime_session_from_checkpoint", None)
+        if not callable(restore_fn):
+            continue
+        payload = await restore_fn()
+        if not payload:
+            continue
+        restored.append({
+            "agent_id": getattr(agent, "agent_id", None),
+            "agent_name": getattr(agent, "name", getattr(agent, "config", None).name if getattr(agent, "config", None) else None),
+            "checkpoint_id": payload.get("checkpoint_id"),
+        })
+    return restored
+
+
+async def _bootstrap_legacy_agent_memories(
+    *,
+    agents: List[Any],
+    project_root: str,
+    project_info: Dict[str, Any],
+    task: AgentTask,
+) -> List[Dict[str, Any]]:
+    from app.db.session import get_sync_session_factory
+    from app.services.runtime_core.memory_runtime import RuntimeMemoryManager
+
+    manager = RuntimeMemoryManager(session_factory=get_sync_session_factory())
+    loaded: List[Dict[str, Any]] = []
+    user_message = " ".join(
+        part.strip()
+        for part in [
+            str(task.name or "").strip(),
+            str(task.description or "").strip(),
+            " ".join(str(item) for item in (task.target_vulnerabilities or [])),
+        ]
+        if part and str(part).strip()
+    ).strip() or "Audit the project for security vulnerabilities."
+    recon_payload = {
+        "project_info": {**dict(project_info or {}), "root": project_root},
+        "project_profile": {
+            "languages": list((project_info or {}).get("languages") or []),
+            "frameworks": list((project_info or {}).get("frameworks") or []),
+        },
+        "summary": str(task.description or task.name or (project_info or {}).get("name") or "").strip(),
+        "target_vulnerabilities": list(task.target_vulnerabilities or []),
+        "entry_points": list(task.target_files or []),
+        "priority_paths": list(task.target_files or []),
+    }
+
+    for agent in agents:
+        if not callable(getattr(agent, "load_runtime_memory_bundle", None)):
+            continue
+        existing_memory = dict((getattr(agent.state, "metadata", {}) or {}).get("memory_runtime") or {})
+        if existing_memory.get("instructions") or existing_memory.get("recalls"):
+            continue
+        bundle = await manager.preload(
+            agent_type=getattr(agent, "agent_type").value,
+            system_prompt=getattr(getattr(agent, "config", None), "system_prompt", "") or "",
+            recon_payload=recon_payload,
+            user_message=user_message,
+            skill_context=None,
+        )
+        if not bundle.instructions and not bundle.recalls:
+            continue
+        agent.load_runtime_memory_bundle(bundle, source="task-bootstrap")
+        loaded.append({
+            "agent_id": getattr(agent, "agent_id", None),
+            "agent_type": getattr(agent, "agent_type").value,
+            "instruction_count": len(bundle.instructions),
+            "recall_count": len(bundle.recalls),
+        })
+    return loaded
+
+
+def _prepare_task_for_resume(task: AgentTask) -> AgentTask:
+    previous_status = str(task.status or "").strip() or None
+    task.status = AgentTaskStatus.PENDING
+    task.current_phase = AgentTaskPhase.PLANNING
+    task.current_step = "Resuming from latest checkpoint"
+    task.error_message = None
+    task.started_at = None
+    task.completed_at = None
+    agent_config = dict(task.agent_config or {})
+    agent_config["resume_from_checkpoint"] = True
+    agent_config["resume_requested_at"] = datetime.now(timezone.utc).isoformat()
+    agent_config["resume_count"] = int(agent_config.get("resume_count") or 0) + 1
+    if previous_status:
+        agent_config["last_resume_from_status"] = previous_status
+    task.agent_config = agent_config
+    return task
+
+
+def _mark_task_resume_restore(task: AgentTask, restored_agents: List[Dict[str, Any]] | None) -> bool:
+    agent_config = dict(task.agent_config or {})
+    if not agent_config.get("resume_from_checkpoint"):
+        return False
+
+    normalized_agents: List[Dict[str, Any]] = []
+    for item in restored_agents or []:
+        if not isinstance(item, dict):
+            continue
+        normalized_agents.append({
+            "agent_id": str(item.get("agent_id") or "").strip() or None,
+            "agent_name": str(item.get("agent_name") or "").strip() or None,
+            "checkpoint_id": str(item.get("checkpoint_id") or "").strip() or None,
+        })
+
+    agent_config["resume_from_checkpoint"] = False
+    agent_config["last_resume_restored_at"] = datetime.now(timezone.utc).isoformat()
+    agent_config["last_resume_restore_count"] = len(normalized_agents)
+    agent_config["last_resume_restored_agents"] = normalized_agents
+    task.agent_config = agent_config
+    if normalized_agents:
+        task.current_step = f"Resumed from {len(normalized_agents)} runtime checkpoints"
+    else:
+        task.current_step = "Resume requested; no runtime checkpoints were found"
+    return True
+
+
 async def _load_runtime_session_ids(db: AsyncSession, task_ids: List[str]) -> Dict[str, str]:
     if not task_ids:
         return {}
@@ -287,6 +437,211 @@ async def _load_runtime_session_ids(db: AsyncSession, task_ids: List[str]) -> Di
         if task_id and task_id not in mapping:
             mapping[str(task_id)] = str(session_id)
     return mapping
+
+
+def _is_verification_enabled(workflow_config: Optional[Dict[str, Any]]) -> bool:
+    if not isinstance(workflow_config, dict):
+        return True
+    agent_states = workflow_config.get('agentStates')
+    if not isinstance(agent_states, dict):
+        return True
+    verification_state = agent_states.get('verification')
+    if isinstance(verification_state, dict):
+        return bool(verification_state.get('enabled', True))
+    if isinstance(verification_state, bool):
+        return verification_state
+    return True
+
+
+async def _load_latest_task_audit_session(db: AsyncSession, task_id: str) -> Optional[AuditSession]:
+    result = await db.execute(
+        select(AuditSession)
+        .where(AuditSession.task_id == task_id)
+        .order_by(AuditSession.created_at.desc())
+        .limit(1)
+    )
+    return result.scalars().first()
+
+
+async def _append_internal_audit_session_message(
+    db: AsyncSession,
+    *,
+    session_id: str,
+    role: str,
+    content: str,
+    name: str,
+    metadata: Optional[Dict[str, Any]] = None,
+) -> AuditSessionMessage:
+    latest_sequence = await db.scalar(
+        select(AuditSessionMessage.sequence)
+        .where(AuditSessionMessage.session_id == session_id)
+        .order_by(AuditSessionMessage.sequence.desc())
+        .limit(1)
+    )
+    message = AuditSessionMessage(
+        session_id=session_id,
+        sequence=int(latest_sequence or 0) + 1,
+        role=role,
+        content=content,
+        name=name,
+        message_metadata=metadata or {},
+        payload={},
+    )
+    db.add(message)
+    await db.flush()
+    return message
+
+
+def _managed_reports_completed(managed_vulnerability: Any) -> bool:
+    reports = list(getattr(managed_vulnerability, 'reports', []) or [])
+    if getattr(managed_vulnerability, 'report_generation_status', '') != 'completed':
+        return False
+    if len(reports) != 3:
+        return False
+    reports_by_kind = {getattr(report, 'report_kind', ''): report for report in reports}
+    for report_kind in ('en', 'zh', 'cve'):
+        report = reports_by_kind.get(report_kind)
+        if report is None:
+            return False
+        if getattr(report, 'generation_status', '') != 'completed':
+            return False
+        if not str(getattr(report, 'markdown_content', '') or '').strip():
+            return False
+    return True
+
+async def _generate_managed_report_bundle_from_session(
+    db: AsyncSession,
+    *,
+    session: AuditSession,
+    task: AgentTask,
+    finding: AgentFinding,
+    managed_vulnerability: Any,
+    report_service: Any,
+):
+    del finding
+    prompt = report_service.build_generation_prompt(vulnerability=managed_vulnerability)
+
+    if session.runtime_stack == FindingRuntimeStack.RUNTIME.value:
+        from app.api.v1.endpoints.audit_sessions import _build_runtime_follow_up_context
+
+        bridge, sandbox_manager, model_name, max_turns = await _build_runtime_follow_up_context(session=session, db=db)
+        try:
+            continuation = await bridge.continue_session_until_payload(
+                session_id=session.id,
+                model_name=model_name,
+                max_turns=max_turns,
+                payload_extractor=report_service.extract_generation_payload_from_snapshot,
+                finalizer_prompts=report_service.build_generation_finalizer_prompts(),
+            )
+            bundle = continuation.get("final_payload")
+            if bundle is None:
+                raise ValueError("Runtime report continuation did not return a report bundle")
+            return bundle
+        finally:
+            try:
+                await sandbox_manager.cleanup()
+            except Exception:
+                logger.debug("Managed-report runtime sandbox cleanup skipped", exc_info=True)
+
+    from app.services.llm.service import LLMService
+
+    user_config = await _get_user_config(db, task.created_by)
+    llm_service = LLMService(user_config=user_config)
+    response = await llm_service.chat_completion(
+        messages=[{"role": "user", "content": prompt}],
+        agent_type="finding",
+    )
+    raw_content = str((response or {}).get("content") or "").strip()
+    return report_service.parse_generation_payload(raw_content)
+
+
+async def _auto_generate_managed_vulnerability_reports(
+    db: AsyncSession,
+    *,
+    task: AgentTask,
+    workflow_config: Optional[Dict[str, Any]],
+    findings: Optional[List[AgentFinding]] = None,
+) -> Dict[str, int]:
+    if _is_verification_enabled(workflow_config):
+        return {'generated': 0, 'failed': 0, 'skipped': 1}
+
+    persisted_findings = list(findings or await _load_task_findings(db, task.id))
+    if not persisted_findings:
+        return {'generated': 0, 'failed': 0, 'skipped': 0}
+
+    from app.services.managed_vulnerability_service import ManagedVulnerabilityService
+    from app.services.vulnerability_report_generation import VulnerabilityReportGenerationService
+
+    managed_service = ManagedVulnerabilityService(db)
+    report_service = VulnerabilityReportGenerationService()
+    session = await _load_latest_task_audit_session(db, task.id)
+
+    stats = {'generated': 0, 'failed': 0, 'skipped': 0}
+    for finding in persisted_findings:
+        managed = await managed_service.create_from_finding(task=task, finding=finding)
+        if _managed_reports_completed(managed):
+            stats['skipped'] += 1
+            continue
+
+        prompt = report_service.build_generation_prompt(vulnerability=managed)
+        if session is not None:
+            await _append_internal_audit_session_message(
+                db,
+                session_id=session.id,
+                role='user',
+                content=prompt,
+                name='managed_report_generator',
+                metadata={
+                    'kind': 'internal_managed_report_request',
+                    'finding_id': finding.id,
+                    'managed_vulnerability_id': managed.id,
+                },
+            )
+
+        try:
+            if session is not None:
+                generated_bundle = await _generate_managed_report_bundle_from_session(
+                    db,
+                    session=session,
+                    task=task,
+                    finding=finding,
+                    managed_vulnerability=managed,
+                    report_service=report_service,
+                )
+            else:
+                from app.services.llm.service import LLMService
+
+                user_config = await _get_user_config(db, task.created_by)
+                llm_service = LLMService(user_config=user_config)
+                response = await llm_service.chat_completion(
+                    messages=[{"role": "user", "content": prompt}],
+                    agent_type="finding",
+                )
+                raw_content = str((response or {}).get("content") or "").strip()
+                generated_bundle = report_service.parse_generation_payload(raw_content)
+            report_service.apply_generated_reports(vulnerability=managed, result=generated_bundle)
+            stats['generated'] += 1
+        except Exception as exc:
+            managed.report_generation_status = 'failed'
+            for report in list(getattr(managed, 'reports', []) or []):
+                report.generation_status = 'failed'
+            if session is not None:
+                await _append_internal_audit_session_message(
+                    db,
+                    session_id=session.id,
+                    role='assistant',
+                    content=f"Managed report generation failed: {exc}",
+                    name='managed_report_generator',
+                    metadata={
+                        'kind': 'internal_managed_report_error',
+                        'finding_id': finding.id,
+                        'managed_vulnerability_id': managed.id,
+                    },
+                )
+            stats['failed'] += 1
+            logger.exception('Managed vulnerability report generation failed for finding %s', finding.id)
+        await db.flush()
+    return stats
 
 
 
@@ -419,6 +774,7 @@ async def _execute_agent_task(task_id: str):
             triage_llm_service = LLMService(user_config=build_agent_user_config("triage"))
             finding_llm_service = LLMService(user_config=build_agent_user_config("finding"))
             verification_llm_service = LLMService(user_config=build_agent_user_config("verification"))
+            runtime_session_checkpoint_store = RuntimeSessionCheckpointStore(session_factory=async_session_factory)
             tools = await _initialize_tools(
                 project_root,
                 orchestrator_llm_service,
@@ -463,14 +819,24 @@ async def _execute_agent_task(task_id: str):
             def check_global_cancel() -> bool:
                 return is_task_cancelled(task_id)
 
-            for agent in [orchestrator, recon_agent, analysis_agent, scan_agent, triage_agent, finding_agent, verification_agent]:
+            legacy_agents = [orchestrator, recon_agent, analysis_agent, scan_agent, triage_agent, finding_agent, verification_agent]
+            for agent in legacy_agents:
                 agent.set_cancel_callback(check_global_cancel)
+                agent.configure_runtime_session_persistence(task_id=task_id, checkpoint_store=runtime_session_checkpoint_store)
+            restored_agents = await _restore_agents_from_checkpoints(legacy_agents)
+            if _mark_task_resume_restore(task, restored_agents):
+                await db.commit()
 
             _running_orchestrators[task_id] = orchestrator
             _running_tasks[task_id] = orchestrator
             _running_event_managers[task_id] = event_manager
             agent_registry.clear()
             orchestrator._register_to_registry(task="Root orchestrator for security audit")
+            if restored_agents:
+                await event_emitter.emit_info(
+                    f"Restored runtime session checkpoints for {len(restored_agents)} agents",
+                    metadata={"restored_agents": restored_agents},
+                )
 
             project_info = await _collect_project_info(
                 project_root,
@@ -481,9 +847,21 @@ async def _execute_agent_task(task_id: str):
             task.total_files = project_info.get("file_count", 0)
             await db.commit()
 
+            preloaded_memories = await _bootstrap_legacy_agent_memories(
+                agents=legacy_agents,
+                project_root=project_root,
+                project_info=project_info,
+                task=task,
+            )
+            if preloaded_memories:
+                await event_emitter.emit_info(
+                    f"Preloaded runtime memories for {len(preloaded_memories)} agents",
+                    metadata={"preloaded_memories": preloaded_memories},
+                )
+
             runtime_agent_config = dict(task.agent_config or {})
             finding_runtime_stack = runtime_agent_config.get("finding_runtime_stack") or "legacy"
-            workflow_config = copy.deepcopy((other_config or {}).get("workflowConfig", {}) or {})
+            workflow_config = _merge_task_workflow_config((other_config or {}).get("workflowConfig", {}), task.audit_scope)
             workflow_config["finding_runtime_stack"] = finding_runtime_stack
             input_data = {
                 "project_id": str(project.id),
@@ -531,11 +909,25 @@ async def _execute_agent_task(task_id: str):
                 task.duration_ms = duration_ms
                 saved_findings = await _load_task_findings(db, task_id)
                 _apply_task_finding_metrics(task, saved_findings)
+                managed_report_stats = await _auto_generate_managed_vulnerability_reports(
+                    db,
+                    task=task,
+                    workflow_config=workflow_config,
+                    findings=saved_findings,
+                )
                 project_ref = await db.get(Project, task.project_id)
                 if project_ref:
                     from app.services.task_report_service import generate_task_report
                     await generate_task_report(db, task, project_ref, saved_findings)
                 await db.commit()
+                if managed_report_stats.get("generated"):
+                    await event_emitter.emit_info(
+                        f"Generated managed vulnerability reports for {managed_report_stats['generated']} findings"
+                    )
+                elif managed_report_stats.get("failed"):
+                    await event_emitter.emit_info(
+                        f"Managed vulnerability report generation failed for {managed_report_stats['failed']} findings"
+                    )
                 await event_emitter.emit_info("Final vulnerability report generated")
                 await event_emitter.emit_phase_complete("reporting", f"Audit completed with {saved_count} findings")
             else:
@@ -635,6 +1027,9 @@ async def _initialize_tools(
         RAGQueryTool,
         SecurityCodeSearchTool,
         FunctionContextTool,
+        build_shared_agent_tool_catalog,
+        build_agent_skill_tools,
+        build_agent_tool_catalog,
     )
     from app.services.agent.knowledge import (
         SecurityKnowledgeQueryTool,
@@ -741,16 +1136,11 @@ async def _initialize_tools(
         await emit(f"RAG initialization failed: {exc}", "warning")
         retriever = None
 
-    shared_file_roots = [str(SkillFileService.library_root())]
-
-    base_tools = {
-        "read_file": FileReadTool(project_root, exclude_patterns, target_files, additional_roots=shared_file_roots),
-        "read_many_files": ReadManyFilesTool(project_root, exclude_patterns, target_files, additional_roots=shared_file_roots),
-        "list_files": ListFilesTool(project_root, exclude_patterns, target_files, additional_roots=shared_file_roots),
-        "search_code": FileSearchTool(project_root, exclude_patterns, target_files, additional_roots=shared_file_roots),
-        "think": ThinkTool(),
-        "reflect": ReflectTool(),
-    }
+    base_tools = build_shared_agent_tool_catalog(
+        project_root=project_root,
+        exclude_patterns=exclude_patterns,
+        target_files=target_files,
+    )
 
     shared_scanners = {
         "semgrep_scan": SemgrepTool(project_root, sandbox_manager),
@@ -764,8 +1154,7 @@ async def _initialize_tools(
 
     recon_tools = {
         **base_tools,
-        "load_skill_body": SkillBodyTool(user_id, agent_type="recon"),
-        "skill_resource_lookup": SkillResourceTool(user_id, agent_type="recon"),
+        **build_agent_skill_tools(user_id=user_id, agent_type="recon"),
         **shared_scanners,
     }
     if retriever:
@@ -775,8 +1164,7 @@ async def _initialize_tools(
 
     analysis_tools = {
         **base_tools,
-        "load_skill_body": SkillBodyTool(user_id, agent_type="analysis"),
-        "skill_resource_lookup": SkillResourceTool(user_id, agent_type="analysis"),
+        **build_agent_skill_tools(user_id=user_id, agent_type="analysis"),
         "smart_scan": SmartScanTool(project_root),
         "quick_audit": QuickAuditTool(project_root),
         "pattern_match": PatternMatchTool(project_root),
@@ -792,20 +1180,17 @@ async def _initialize_tools(
 
     scan_tools = {
         **analysis_tools,
-        "load_skill_body": SkillBodyTool(user_id, agent_type="scan"),
-        "skill_resource_lookup": SkillResourceTool(user_id, agent_type="scan"),
+        **build_agent_skill_tools(user_id=user_id, agent_type="scan"),
     }
 
     triage_tools = {
         **analysis_tools,
-        "load_skill_body": SkillBodyTool(user_id, agent_type="triage"),
-        "skill_resource_lookup": SkillResourceTool(user_id, agent_type="triage"),
+        **build_agent_skill_tools(user_id=user_id, agent_type="triage"),
     }
 
     finding_tools = {
         **base_tools,
-        "load_skill_body": SkillBodyTool(user_id, agent_type="finding"),
-        "skill_resource_lookup": SkillResourceTool(user_id, agent_type="finding"),
+        **build_agent_skill_tools(user_id=user_id, agent_type="finding"),
         "dataflow_analysis": DataFlowAnalysisTool(llm_service),
     }
     if retriever:
@@ -838,8 +1223,7 @@ async def _initialize_tools(
 
     verification_tools = {
         **base_tools,
-        "load_skill_body": SkillBodyTool(user_id, agent_type="verification"),
-        "skill_resource_lookup": SkillResourceTool(user_id, agent_type="verification"),
+        **build_agent_skill_tools(user_id=user_id, agent_type="verification"),
         "sandbox_exec": SandboxTool(sandbox_manager),
         "sandbox_http": SandboxHttpTool(sandbox_manager),
         "verify_vulnerability": VulnerabilityVerifyTool(sandbox_manager),
@@ -863,12 +1247,11 @@ async def _initialize_tools(
         "create_vulnerability_report": CreateVulnerabilityReportTool(project_root),
     }
 
-    orchestrator_tools = {
-        "think": ThinkTool(),
-        "reflect": ReflectTool(),
-        "load_skill_body": SkillBodyTool(user_id, agent_type="orchestrator"),
-        "skill_resource_lookup": SkillResourceTool(user_id, agent_type="orchestrator"),
-    }
+    orchestrator_tools = build_agent_tool_catalog(
+        project_root=None,
+        user_id=user_id,
+        agent_type="orchestrator",
+    )
 
     return {
         "recon": recon_tools,
@@ -992,6 +1375,118 @@ async def _collect_project_info(
 
 
 
+def _severity_rank(value: str | None) -> int:
+    return {"info": 0, "low": 1, "medium": 2, "high": 3, "critical": 4}.get(str(value or "").lower(), -1)
+
+
+def _finding_status_rank(value: str | None) -> int:
+    return {
+        FindingStatus.NEW: 0,
+        FindingStatus.ANALYZING: 1,
+        FindingStatus.NEEDS_REVIEW: 1,
+        FindingStatus.FALSE_POSITIVE: 2,
+        FindingStatus.VERIFIED: 3,
+        FindingStatus.FIXED: 4,
+    }.get(str(value or "").lower(), -1)
+
+
+def _merge_string_list(existing_values: Any, new_values: Any) -> list[str] | None:
+    merged: list[str] = []
+    for value in list(existing_values or []) + list(new_values or []):
+        normalized = str(value or "").strip()
+        if normalized and normalized not in merged:
+            merged.append(normalized)
+    return merged or None
+
+
+def _merge_existing_finding_record(existing: AgentFinding, incoming: AgentFinding, raw_finding: Dict[str, Any]) -> bool:
+    changed = False
+
+    if _severity_rank(incoming.severity) > _severity_rank(existing.severity):
+        existing.severity = incoming.severity
+        changed = True
+    if (incoming.ai_confidence or 0) > (existing.ai_confidence or 0):
+        existing.ai_confidence = incoming.ai_confidence
+        changed = True
+    if incoming.is_verified and not existing.is_verified:
+        existing.is_verified = True
+        existing.status = incoming.status
+        changed = True
+    elif _finding_status_rank(incoming.status) > _finding_status_rank(existing.status):
+        existing.status = incoming.status
+        changed = True
+
+    for field_name in (
+        "description",
+        "suggestion",
+        "ai_explanation",
+        "verification_method",
+        "poc_code",
+        "poc_description",
+        "source",
+        "sink",
+    ):
+        incoming_value = getattr(incoming, field_name, None)
+        existing_value = getattr(existing, field_name, None)
+        if incoming_value and (not existing_value or incoming.is_verified):
+            if existing_value != incoming_value:
+                setattr(existing, field_name, incoming_value)
+                changed = True
+
+    if incoming.has_poc and not existing.has_poc:
+        existing.has_poc = True
+        changed = True
+    if incoming.poc_steps and not existing.poc_steps:
+        existing.poc_steps = incoming.poc_steps
+        changed = True
+    if incoming.verification_result and incoming.verification_result != existing.verification_result:
+        existing.verification_result = incoming.verification_result
+        changed = True
+    if incoming.line_end and (existing.line_end or 0) < incoming.line_end:
+        existing.line_end = incoming.line_end
+        changed = True
+
+    merged_references = _merge_string_list(existing.references, incoming.references)
+    if merged_references != (existing.references or None):
+        existing.references = merged_references
+        changed = True
+
+    metadata = dict(existing.finding_metadata or {})
+    latest_report_status = raw_finding.get("report_status") or raw_finding.get("verdict")
+    if latest_report_status and metadata.get("report_status") != latest_report_status:
+        metadata["report_status"] = latest_report_status
+        changed = True
+    if raw_finding.get("origin") and metadata.get("origin") != raw_finding.get("origin"):
+        metadata["origin"] = raw_finding.get("origin")
+        changed = True
+    if raw_finding.get("evidence_type") and metadata.get("evidence_type") != raw_finding.get("evidence_type"):
+        metadata["evidence_type"] = raw_finding.get("evidence_type")
+        changed = True
+    if changed:
+        metadata["raw_finding"] = raw_finding
+        metadata["merge_count"] = int(metadata.get("merge_count") or 0) + 1
+        metadata["last_merged_at"] = datetime.now(timezone.utc).isoformat()
+        existing.finding_metadata = metadata
+    return changed
+
+
+def _build_finding_fingerprint(record: AgentFinding) -> str:
+    record.fingerprint = record.fingerprint or record.generate_fingerprint()
+    normalized = str(record.fingerprint or "").strip()
+    if normalized:
+        return normalized
+    components = [
+        str(record.vulnerability_type or ""),
+        str(record.file_path or ""),
+        str(record.line_start or 0),
+        str(record.line_end or 0),
+        str(record.title or ""),
+    ]
+    fingerprint = hashlib.sha256("|".join(components).encode("utf-8")).hexdigest()[:16]
+    record.fingerprint = fingerprint
+    return fingerprint
+
+
 async def _save_findings(
     db: AsyncSession,
     task_id: str,
@@ -1005,6 +1500,12 @@ async def _save_findings(
     if not findings:
         logger.warning(f"[SaveFindings] No findings to save for task {task_id}")
         return 0
+
+    existing_result = await db.execute(select(AgentFinding).where(AgentFinding.task_id == task_id))
+    existing_findings = list(existing_result.scalars().all())
+    existing_by_fingerprint: Dict[str, AgentFinding] = {}
+    for existing in existing_findings:
+        existing_by_fingerprint[_build_finding_fingerprint(existing)] = existing
 
     severity_map = {
         "critical": VulnerabilitySeverity.CRITICAL,
@@ -1071,7 +1572,8 @@ async def _save_findings(
             return raw_references
         return [str(raw_references)]
 
-    saved_count = 0
+    inserted_count = 0
+    merged_count = 0
     for finding in findings:
         if not isinstance(finding, dict):
             logger.debug(f"[SaveFindings] Skipping non-dict finding: {type(finding)}")
@@ -1189,17 +1691,29 @@ async def _save_findings(
                     "evidence_type": finding.get("evidence_type"),
                 },
             )
+            fingerprint = _build_finding_fingerprint(record)
+            existing = existing_by_fingerprint.get(fingerprint)
+            if existing is not None:
+                if _merge_existing_finding_record(existing, record, finding):
+                    merged_count += 1
+                continue
+
             db.add(record)
-            saved_count += 1
+            existing_by_fingerprint[fingerprint] = record
+            inserted_count += 1
         except Exception as exc:
             logger.exception(f"[SaveFindings] Failed to save finding: {exc}")
 
-    if saved_count:
+    persisted_count = inserted_count + merged_count
+    if persisted_count:
         await db.commit()
-        logger.info(f"[SaveFindings] Saved {saved_count} findings for task {task_id}")
+        logger.info(
+            f"[SaveFindings] Persisted {persisted_count} findings for task {task_id} "
+            f"({inserted_count} inserted, {merged_count} merged)"
+        )
     else:
         logger.warning(f"[SaveFindings] No findings were saved for task {task_id}")
-    return saved_count
+    return persisted_count
 
 
 def _serialize_agent_finding_record(finding: AgentFinding) -> Dict[str, Any]:
@@ -1489,14 +2003,18 @@ async def create_agent_task(
         status=AgentTaskStatus.PENDING,
         current_phase=AgentTaskPhase.PLANNING,
         target_vulnerabilities=request.target_vulnerabilities,
+        version_label=request.version_label,
+        version_tag=request.version_tag,
         verification_level=request.verification_level or "sandbox",
         branch_name=request.branch_name,
+        repository_url_snapshot=project.repository_url,
         exclude_patterns=request.exclude_patterns,
         target_files=request.target_files,
         max_iterations=request.max_iterations or 50,
         timeout_seconds=request.timeout_seconds or 1800,
         agent_config={"finding_runtime_stack": coerce_finding_runtime_stack(request.finding_runtime_stack or getattr(settings, "FINDING_RUNTIME_STACK_DEFAULT", FindingRuntimeStack.LEGACY.value)).value},
         created_by=current_user.id,
+        audit_scope=request.audit_scope,
     )
 
     db.add(task)
@@ -1716,6 +2234,41 @@ async def get_debug_trace(
         task_status=str(task.status),
         events=events,
     )
+
+
+@router.post("/{task_id}/resume")
+async def resume_agent_task(
+    task_id: str,
+    background_tasks: BackgroundTasks,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(deps.get_current_user),
+) -> Any:
+    """Resume a cancelled, failed, or paused audit task from the latest checkpoint."""
+    task = await db.get(AgentTask, task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+
+    project = await db.get(Project, task.project_id)
+    if not project or project.owner_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Access denied")
+    if task.status == AgentTaskStatus.RUNNING:
+        raise HTTPException(status_code=400, detail="Task is already running")
+    if task.status == AgentTaskStatus.COMPLETED:
+        raise HTTPException(status_code=400, detail="Completed tasks cannot be resumed")
+    if task.status not in [AgentTaskStatus.CANCELLED, AgentTaskStatus.FAILED, AgentTaskStatus.PAUSED]:
+        raise HTTPException(status_code=400, detail="Task is not resumable")
+
+    _cancelled_tasks.discard(task_id)
+    _prepare_task_for_resume(task)
+    await db.commit()
+    background_tasks.add_task(_execute_agent_task, task.id)
+    logger.info(f"Resumed agent task {task.id}")
+    return {
+        "message": "Task resumed",
+        "task_id": task.id,
+        "status": task.status,
+        "current_phase": task.current_phase,
+    }
 
 
 @router.post("/{task_id}/cancel")
@@ -2441,7 +2994,7 @@ async def get_checkpoint_detail(
 async def generate_audit_report(
     task_id: str,
     format: str = Query("markdown", pattern="^(markdown|json|html)$"),
-    template_id: Optional[str] = Query(None, description="閼奉亜鐣炬稊澶嬪Г閸涘﹥膩閺?ID"),
+    template_id: Optional[str] = Query(None, description="闂佺厧顨庢禍婊堟偩閻愵剛鈻曞璺侯儏琚氶梺鍛婄☉閿曘儴鍟梺?ID"),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(deps.get_current_user),
 ):
@@ -2485,6 +3038,8 @@ async def generate_audit_report(
         extension = "html"
     filename = f"audit_report_{task.id[:8]}_{datetime.now().strftime('%Y%m%d')}.{extension}"
     return Response(report.content, media_type=media_type, headers={"Content-Disposition": f"attachment; filename={filename}"})
+
+
 
 
 

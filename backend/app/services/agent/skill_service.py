@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
@@ -107,6 +107,9 @@ class SkillService:
             "mandatory_reads": list(state.route_plan.mandatory_reads),
             "recommended_reads": list(state.route_plan.recommended_reads),
             "selection_reason": list(state.route_plan.selection_reason),
+            "startup_reads": list(state.route_plan.startup_reads),
+            "deferred_skills": list(state.route_plan.deferred_skills),
+            "deferred_skill_reads": list(state.route_plan.deferred_skill_reads),
         }
         return {"metadata": metadata, "matched": matched, "prompt": state.prompt, "route_plan": route_plan}
 
@@ -125,9 +128,15 @@ class SkillService:
         primary_skill = route_plan.get("primary_skill")
         if primary_skill:
             lines.extend(["", f"Primary skill: {primary_skill}"])
+        startup_reads = route_plan.get("startup_reads") or []
+        if startup_reads:
+            lines.append(f"Startup reads: {', '.join(str(item) for item in startup_reads)}")
         secondary = route_plan.get("secondary_skills") or []
         if secondary:
             lines.append(f"Secondary skills: {', '.join(secondary)}")
+        deferred = route_plan.get("deferred_skills") or []
+        if deferred:
+            lines.append(f"Deferred skills: {', '.join(deferred)}")
         return "\n".join(lines)
 
     @classmethod
@@ -138,6 +147,11 @@ class SkillService:
             skill_ref=skill_ref,
             agent_type=agent_type,
         )
+
+    @classmethod
+    def get_skill_entry(cls, user_id: Optional[str], skill_ref: str, agent_type: Optional[str] = None):
+        del user_id
+        return cls._find_skill(skill_ref, agent_type=agent_type)
 
     @classmethod
     async def get_skill_body(cls, user_id: Optional[str], skill_ref: str, agent_type: Optional[str] = None) -> Dict[str, Any]:

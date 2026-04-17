@@ -14,9 +14,17 @@ def test_skill_file_service_write_and_read_stay_on_canonical_skill_root(tmp_path
         tags=["finding"],
     )
 
+    installed_index = json.loads(
+        (tmp_path / "skill_library" / ".runtime" / "installed_skills.json").read_text(encoding="utf-8")
+    )
+
     assert skill["slug"] == "alpha"
     assert (tmp_path / "skill_library" / "alpha" / "SKILL.md").exists()
     assert not (tmp_path / "skill_library" / "agents" / "finding" / "alpha").exists()
+    assert installed_index["skills"][0]["slug"] == "alpha"
+    assert installed_index["skills"][0]["source_type"] == "manual"
+    assert installed_index["skills"][0]["bound_agents"] == []
+    assert installed_index["skills"][0]["skill_file"].replace("\\", "/").endswith("skill_library/alpha/SKILL.md")
 
 
 def test_skill_file_service_binding_refresh_no_longer_creates_agent_skill_mirror(tmp_path, monkeypatch):
@@ -40,9 +48,14 @@ def test_skill_file_service_binding_refresh_no_longer_creates_agent_skill_mirror
     )
 
     aggregated = json.loads((tmp_path / "skill_library" / "alpha" / "bindings.json").read_text(encoding="utf-8"))
+    installed_index = json.loads(
+        (tmp_path / "skill_library" / ".runtime" / "installed_skills.json").read_text(encoding="utf-8")
+    )
 
     assert binding["skill_id"] == "alpha"
-    assert aggregated[0]["skill_id"] == "alpha"
-    assert aggregated[0]["skill_file"].replace("\\", "/").endswith("skill_library/alpha/SKILL.md")
-    assert aggregated[0]["workspace_relative_path"] == "skill_library/alpha"
+    assert aggregated["skills"][0]["skill_id"] == "alpha"
+    assert aggregated["skills"][0]["skill_file"].replace("\\", "/").endswith("skill_library/alpha/SKILL.md")
+    assert aggregated["skills"][0]["workspace_relative_path"] == "skill_library/alpha"
     assert not (tmp_path / "skill_library" / "agents" / "finding" / "alpha").exists()
+    assert installed_index["skills"][0]["bound_agents"] == ["finding"]
+    assert installed_index["skills"][0]["bindings"][0]["id"] == "finding:alpha"

@@ -84,8 +84,11 @@ async def test_skill_service_resolve_agent_skills_uses_runtime(runtime_skill_lib
     assert "<name>alpha</name>" in skill_context["prompt"]
     assert "<skill_file_path>" in skill_context["prompt"]
     assert "<references_root>" in skill_context["prompt"]
+    assert "<progressive_loading>" in skill_context["prompt"]
     assert skill_context["route_plan"]["primary_skill"] == "alpha"
     assert skill_context["route_plan"]["secondary_skills"] == []
+    assert skill_context["route_plan"]["startup_reads"][0].replace("\\", "/").endswith("skill_library/alpha/SKILL.md")
+    assert skill_context["route_plan"]["deferred_skills"] == ["ai-security"]
 
 
 @pytest.mark.asyncio
@@ -121,6 +124,7 @@ async def test_skill_service_route_plan_matches_ai_skill_only_for_ai_context(run
     assert [item["slug"] for item in skill_context["matched"]] == ["alpha", "ai-security"]
     assert skill_context["route_plan"]["primary_skill"] == "alpha"
     assert skill_context["route_plan"]["secondary_skills"] == ["ai-security"]
+    assert skill_context["route_plan"]["deferred_skills"] == ["ai-security"]
 
 
 @pytest.mark.asyncio

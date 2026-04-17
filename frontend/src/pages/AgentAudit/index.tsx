@@ -6,7 +6,7 @@
 
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { useNavigate, useParams } from "react-router-dom";
-import { Terminal, Bot, Loader2, Radio, Filter, Maximize2, ArrowDown } from "lucide-react";
+import { Terminal, Bot, Loader2, Radio, Filter, Maximize2, ArrowDown, FileText } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { toast } from "sonner";
 import { useAgentStream } from "@/hooks/useAgentStream";
@@ -169,6 +169,7 @@ function AgentAuditPageContent() {
   const [showSplash, setShowSplash] = useState(!taskId);
   const [showCreateDialog, setShowCreateDialog] = useState(false);
   const [showExportDialog, setShowExportDialog] = useState(false);
+  const [activeDetailView, setActiveDetailView] = useState<'activity' | 'report'>('activity');
   const [isCancelling, setIsCancelling] = useState(false);
   const [statusVerb, setStatusVerb] = useState(ACTION_VERBS[0]);
   const [statusDots, setStatusDots] = useState(0);
@@ -206,6 +207,10 @@ function AgentAuditPageContent() {
     }
     previousTaskIdRef.current = taskId;
   }, [taskId, reset]);
+
+  useEffect(() => {
+    setActiveDetailView('activity');
+  }, [taskId]);
 
   // ============ Data Loading ============
 
@@ -1315,7 +1320,7 @@ function AgentAuditPageContent() {
         <div className="absolute inset-0 vignette pointer-events-none" />
         <div className="flex items-center gap-3 text-muted-foreground relative z-10">
           <Loader2 className="w-5 h-5 animate-spin text-primary" />
-          <span className="text-sm text-slate-500">姝ｅ湪鍑嗗瀹¤浠诲姟宸ヤ綔鍖?..</span>
+          <span className="text-sm text-slate-500">正在准备审计任务工作区...</span>
         </div>
       </div>
     );
@@ -1341,92 +1346,142 @@ function AgentAuditPageContent() {
       <div className="relative z-10 flex flex-1 overflow-hidden px-4 pb-4">
         {/* Left Panel - Activity Log */}
         <div className="relative flex w-[68%] flex-col overflow-hidden rounded-[28px] border border-border/70 bg-white/82 shadow-[0_20px_48px_rgba(88,97,110,0.12)] backdrop-blur-xl">
-          {/* Log header */}
-          <div className="flex-shrink-0 h-12 border-b border-border flex items-center justify-between px-5 bg-card">
-            <div className="flex items-center gap-4 text-xs text-muted-foreground">
-              <div className="flex items-center gap-2.5">
-                <Terminal className="w-4 h-4 text-primary" />
-                <span className="uppercase font-bold tracking-wider text-foreground text-sm">Activity Log</span>
-              </div>
-              {isConnected && (
-                <div className="flex items-center gap-2 px-2.5 py-1 rounded-full bg-emerald-500/10 border border-emerald-500/30">
-                  <span className="w-2 h-2 rounded-full bg-emerald-500"></span>
-                  <span className="text-xs font-mono uppercase tracking-wider text-emerald-600 dark:text-emerald-400 font-semibold">Live</span>
+          {/* Detail header */}
+          <div className="flex-shrink-0 border-b border-border bg-card px-5 py-3">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div className="flex items-center gap-4 text-xs text-muted-foreground">
+                <div className="flex items-center gap-2.5">
+                  {activeDetailView === 'activity' ? (
+                    <Terminal className="w-4 h-4 text-primary" />
+                  ) : (
+                    <FileText className="w-4 h-4 text-primary" />
+                  )}
+                  <span className="uppercase font-bold tracking-wider text-foreground text-sm">
+                    {activeDetailView === 'activity' ? 'Activity Log' : 'Final Report'}
+                  </span>
                 </div>
-              )}
-              <Badge variant="outline" className="h-6 px-2 text-xs border-border text-muted-foreground font-mono bg-muted">
-                {filteredLogs.length}{!showAllLogs && logs.length !== filteredLogs.length ? ` / ${logs.length}` : ''} entries
-              </Badge>
-            </div>
+                {activeDetailView === 'activity' && isConnected && (
+                  <div className="flex items-center gap-2 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2.5 py-1">
+                    <span className="h-2 w-2 rounded-full bg-emerald-500"></span>
+                    <span className="text-xs font-mono font-semibold uppercase tracking-wider text-emerald-600 dark:text-emerald-400">Live</span>
+                  </div>
+                )}
+                <Badge variant="outline" className="h-6 px-2 text-xs border-border text-muted-foreground font-mono bg-muted">
+                  {activeDetailView === 'activity'
+                    ? `${filteredLogs.length}${!showAllLogs && logs.length !== filteredLogs.length ? ` / ${logs.length}` : ''} entries`
+                    : `${findings.length} findings`}
+                </Badge>
+              </div>
 
-            <button
-              onClick={() => setAutoScroll(!isAutoScroll)}
-              className={`
-                flex items-center gap-2 text-xs px-3 py-1.5 rounded-md font-mono uppercase tracking-wider
-                ${isAutoScroll
-                  ? 'bg-primary/15 text-primary border border-primary/50'
-                  : 'text-muted-foreground hover:text-foreground border border-border hover:bg-muted'
-                }
-              `}
-            >
-              <ArrowDown className="w-3.5 h-3.5" />
-              <span>Auto-scroll</span>
-            </button>
+              <div className="flex flex-wrap items-center gap-2">
+                {isComplete && (
+                  <div className="inline-flex rounded-full border border-border/70 bg-background/80 p-1 shadow-sm">
+                    <button
+                      type="button"
+                      onClick={() => setActiveDetailView('activity')}
+                      className={`rounded-full px-3 py-1.5 text-xs font-medium transition ${activeDetailView === 'activity' ? 'bg-primary text-primary-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}`}
+                    >
+                      Activity Log
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setActiveDetailView('report')}
+                      disabled={findings.length === 0}
+                      className={`rounded-full px-3 py-1.5 text-xs font-medium transition ${activeDetailView === 'report' ? 'bg-primary text-primary-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'} disabled:cursor-not-allowed disabled:opacity-45`}
+                    >
+                      最终报告
+                    </button>
+                  </div>
+                )}
+
+                {activeDetailView === 'activity' && (
+                  <button
+                    onClick={() => setAutoScroll(!isAutoScroll)}
+                    className={`
+                      flex items-center gap-2 text-xs px-3 py-1.5 rounded-md font-mono uppercase tracking-wider
+                      ${isAutoScroll
+                        ? 'bg-primary/15 text-primary border border-primary/50'
+                        : 'text-muted-foreground hover:text-foreground border border-border hover:bg-muted'
+                      }
+                    `}
+                  >
+                    <ArrowDown className="w-3.5 h-3.5" />
+                    <span>Auto-scroll</span>
+                  </button>
+                )}
+              </div>
+            </div>
           </div>
 
-          {/* Log content */}
-          <div className="flex-1 overflow-y-auto p-5 custom-scrollbar bg-[linear-gradient(180deg,rgba(255,255,255,0.56),rgba(245,238,229,0.72))]">
-            {/* Filter indicator */}
-            {selectedAgentId && !showAllLogs && (
-              <div className="mb-4 px-4 py-2.5 bg-primary/10 border border-primary/30 rounded-lg flex items-center justify-between">
-                <div className="flex items-center gap-2.5 text-sm text-primary">
-                  <Filter className="w-3.5 h-3.5" />
-                  <span className="font-medium">Filtering logs for selected agent</span>
-                </div>
-                <button
-                  onClick={() => selectAgent(null)}
-                  className="text-xs text-muted-foreground hover:text-primary font-mono uppercase px-2 py-1 rounded hover:bg-primary/10"
-                >
-                  Clear Filter
-                </button>
-              </div>
-            )}
-
-            {/* Logs */}
-            {filteredLogs.length === 0 ? (
-              <div className="h-full flex items-center justify-center">
-                <div className="text-center text-muted-foreground">
-                  {isRunning ? (
-                    <div className="flex flex-col items-center gap-3">
-                      <Loader2 className="w-6 h-6 animate-spin text-muted-foreground" />
-                      <span className="text-sm font-mono tracking-wide">
-                        {selectedAgentId && !showAllLogs
-                          ? 'WAITING FOR ACTIVITY FROM SELECTED AGENT...'
-                          : 'WAITING FOR AGENT ACTIVITY...'}
-                      </span>
+          {/* Detail content */}
+          <div className="flex-1 overflow-hidden bg-[linear-gradient(180deg,rgba(255,255,255,0.56),rgba(245,238,229,0.72))]">
+            {activeDetailView === 'activity' ? (
+              <div className="h-full overflow-y-auto p-5 custom-scrollbar">
+                {/* Filter indicator */}
+                {selectedAgentId && !showAllLogs && (
+                  <div className="mb-4 px-4 py-2.5 bg-primary/10 border border-primary/30 rounded-lg flex items-center justify-between">
+                    <div className="flex items-center gap-2.5 text-sm text-primary">
+                      <Filter className="w-3.5 h-3.5" />
+                      <span className="font-medium">Filtering logs for selected agent</span>
                     </div>
-                  ) : (
-                    <span className="text-sm font-mono tracking-wide">
-                      {selectedAgentId && !showAllLogs
-                        ? 'NO ACTIVITY FROM SELECTED AGENT'
-                        : 'NO ACTIVITY YET'}
-                    </span>
-                  )}
-                </div>
+                    <button
+                      onClick={() => selectAgent(null)}
+                      className="text-xs text-muted-foreground hover:text-primary font-mono uppercase px-2 py-1 rounded hover:bg-primary/10"
+                    >
+                      Clear Filter
+                    </button>
+                  </div>
+                )}
+
+                {/* Logs */}
+                {filteredLogs.length === 0 ? (
+                  <div className="h-full flex items-center justify-center">
+                    <div className="text-center text-muted-foreground">
+                      {isRunning ? (
+                        <div className="flex flex-col items-center gap-3">
+                          <Loader2 className="w-6 h-6 animate-spin text-muted-foreground" />
+                          <span className="text-sm font-mono tracking-wide">
+                            {selectedAgentId && !showAllLogs
+                              ? 'WAITING FOR ACTIVITY FROM SELECTED AGENT...'
+                              : 'WAITING FOR AGENT ACTIVITY...'}
+                          </span>
+                        </div>
+                      ) : (
+                        <span className="text-sm font-mono tracking-wide">
+                          {selectedAgentId && !showAllLogs
+                            ? 'NO ACTIVITY FROM SELECTED AGENT'
+                            : 'NO ACTIVITY YET'}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    {filteredLogs.map(item => (
+                      <LogEntry
+                        key={item.id}
+                        item={item}
+                        isExpanded={expandedLogIds.has(item.id)}
+                        onToggle={() => toggleLogExpanded(item.id)}
+                      />
+                    ))}
+                  </div>
+                )}
+                <div ref={logEndRef} />
+              </div>
+            ) : findings.length > 0 ? (
+              <div className="h-full overflow-y-auto p-5 custom-scrollbar">
+                <FinalReportPanel task={task} findings={findings} />
               </div>
             ) : (
-              <div className="space-y-3">
-                {filteredLogs.map(item => (
-                  <LogEntry
-                    key={item.id}
-                    item={item}
-                    isExpanded={expandedLogIds.has(item.id)}
-                    onToggle={() => toggleLogExpanded(item.id)}
-                  />
-                ))}
+              <div className="flex h-full items-center justify-center p-6 text-center text-muted-foreground">
+                <div>
+                  <FileText className="mx-auto mb-3 h-8 w-8 text-muted-foreground/60" />
+                  <p className="text-sm font-medium">当前任务还没有可展示的最终漏洞报告</p>
+                  <p className="mt-2 text-xs">完成 verification 并产出 findings 后，这里会展示最终报告。</p>
+                </div>
               </div>
             )}
-            <div ref={logEndRef} />
           </div>
 
           {/* Status bar */}
@@ -1553,12 +1608,6 @@ function AgentAuditPageContent() {
           </div>
         </div>
       </div>
-
-      {isComplete && findings.length > 0 && (
-        <div className="relative z-10 px-3 pb-3">
-          <FinalReportPanel task={task} findings={findings} />
-        </div>
-      )}
 
       {/* Create dialog */}
       <CreateAgentTaskDialog open={showCreateDialog} onOpenChange={setShowCreateDialog} />

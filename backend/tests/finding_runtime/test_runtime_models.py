@@ -1,8 +1,10 @@
 from app.services.finding_runtime.config import FindingRuntimeStack, coerce_finding_runtime_stack
 from app.services.finding_runtime.models import (
+    RuntimeContinueReason,
     RuntimeMessageRole,
     RuntimeSessionState,
     RuntimeStopReason,
+    TurnExecutionResult,
     ToolCallRequest,
     TranscriptItem,
 )
@@ -25,10 +27,36 @@ def test_runtime_enums_expose_runtime_states_and_stop_reasons():
     assert RuntimeSessionState.RUNNING.value == "running"
     assert RuntimeSessionState.COMPLETED.value == "completed"
 
-    assert RuntimeStopReason.ASSISTANT_TURN_COMPLETE.value == "assistant_turn_complete"
-    assert RuntimeStopReason.USER_FOLLOW_UP_REQUIRED.value == "user_follow_up_required"
-    assert RuntimeStopReason.TOOL_EXECUTION_CONTINUE.value == "tool_execution_continue"
-    assert RuntimeStopReason.MAX_TURNS_EXCEEDED.value == "max_turns_exceeded"
+    assert RuntimeStopReason.COMPLETED.value == "completed"
+    assert RuntimeStopReason.BLOCKING_LIMIT.value == "blocking_limit"
+    assert RuntimeStopReason.PROMPT_TOO_LONG.value == "prompt_too_long"
+    assert RuntimeStopReason.IMAGE_ERROR.value == "image_error"
+    assert RuntimeStopReason.MODEL_ERROR.value == "model_error"
+    assert RuntimeStopReason.ABORTED_STREAMING.value == "aborted_streaming"
+    assert RuntimeStopReason.ABORTED_TOOLS.value == "aborted_tools"
+    assert RuntimeStopReason.STOP_HOOK_PREVENTED.value == "stop_hook_prevented"
+    assert RuntimeStopReason.HOOK_STOPPED.value == "hook_stopped"
+    assert RuntimeStopReason.MAX_TURNS.value == "max_turns"
+
+    assert RuntimeContinueReason.NEXT_TURN.value == "next_turn"
+    assert RuntimeContinueReason.MAX_OUTPUT_TOKENS_ESCALATE.value == "max_output_tokens_escalate"
+    assert RuntimeContinueReason.MAX_OUTPUT_TOKENS_RECOVERY.value == "max_output_tokens_recovery"
+    assert RuntimeContinueReason.REACTIVE_COMPACT_RETRY.value == "reactive_compact_retry"
+    assert RuntimeContinueReason.COLLAPSE_DRAIN_RETRY.value == "collapse_drain_retry"
+    assert RuntimeContinueReason.STOP_HOOK_BLOCKING.value == "stop_hook_blocking"
+    assert RuntimeContinueReason.TOKEN_BUDGET_CONTINUATION.value == "token_budget_continuation"
+
+
+def test_turn_execution_result_supports_transition_reasons():
+    result = TurnExecutionResult(
+        turn_id="turn-1",
+        stop_reason=None,
+        transition=RuntimeContinueReason.NEXT_TURN,
+    )
+
+    assert result.turn_id == "turn-1"
+    assert result.stop_reason is None
+    assert result.transition is RuntimeContinueReason.NEXT_TURN
 
 
 def test_transcript_item_normalizes_optional_metadata_and_payloads():

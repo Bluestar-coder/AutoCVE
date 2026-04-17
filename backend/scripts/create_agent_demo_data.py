@@ -94,6 +94,7 @@ async def create_agent_demo_task(db: AsyncSession, project: Project, user_id: st
         target_vulnerabilities=["sql_injection", "xss", "command_injection", "path_traversal", "ssrf", "hardcoded_secret"],
         verification_level="sandbox",
         branch_name="main",
+        version_label="demo-main",
         exclude_patterns=["*.test.py", "*.spec.js", "__pycache__/*"],
 
         # LLM 配置

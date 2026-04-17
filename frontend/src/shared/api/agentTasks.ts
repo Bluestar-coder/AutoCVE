@@ -16,6 +16,11 @@ export interface AgentTask {
   status: string;
   current_phase: string | null;
   current_step: string | null;
+  version_label?: string | null;
+  version_tag?: string | null;
+  branch_name?: string | null;
+  commit_sha?: string | null;
+  repository_url_snapshot?: string | null;
   runtime_session_id?: string | null;
   finding_runtime_stack?: string | null;
 
@@ -147,6 +152,8 @@ export interface CreateAgentTaskRequest {
   audit_scope?: Record<string, unknown>;
   target_vulnerabilities?: string[];
   verification_level?: "analysis_only" | "sandbox" | "generate_poc";
+  version_label: string;
+  version_tag?: string;
   branch_name?: string;
   exclude_patterns?: string[];
   target_files?: string[];
@@ -481,5 +488,6 @@ export async function downloadAgentReport(taskId: string, format: "markdown" | "
   link.parentNode?.removeChild(link);
   window.URL.revokeObjectURL(url);
 }
+
 
 

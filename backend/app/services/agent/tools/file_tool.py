@@ -150,6 +150,14 @@ class FileReadTool(AgentTool):
     def args_schema(self):
         return FileReadInput
 
+    def is_concurrency_safe(self, **kwargs) -> bool:
+        del kwargs
+        return True
+
+    def is_read_only(self, **kwargs) -> bool:
+        del kwargs
+        return True
+
     @staticmethod
     def _read_file_lines_sync(file_path: str, start_idx: int, end_idx: int) -> tuple[list[str], int]:
         selected_lines: List[str] = []
@@ -400,6 +408,14 @@ class FileSearchTool(AgentTool):
     def args_schema(self):
         return FileSearchInput
 
+    def is_concurrency_safe(self, **kwargs) -> bool:
+        del kwargs
+        return True
+
+    def is_read_only(self, **kwargs) -> bool:
+        del kwargs
+        return True
+
     @staticmethod
     def _read_file_lines_sync(file_path: str) -> List[str]:
         with open(file_path, "r", encoding="utf-8", errors="ignore") as handle:
@@ -567,6 +583,14 @@ class ListFilesTool(AgentTool):
     @property
     def args_schema(self):
         return ListFilesInput
+
+    def is_concurrency_safe(self, **kwargs) -> bool:
+        del kwargs
+        return True
+
+    def is_read_only(self, **kwargs) -> bool:
+        del kwargs
+        return True
 
     async def _execute(
         self,

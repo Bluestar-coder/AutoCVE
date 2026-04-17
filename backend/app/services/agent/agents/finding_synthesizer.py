@@ -60,8 +60,15 @@ class FindingSynthesizer:
 
         summary_text = ""
         if findings:
-            summary_text = (
-                f"Synthesized {len(findings)} candidate findings from "
-                f"{sum(1 for candidate in runtime_state.queue if candidate.evidence_bundle_ids)} evidence-backed candidates."
-            )
+            evidence_backed_candidates = sum(1 for candidate in runtime_state.queue if candidate.evidence_bundle_ids)
+            unresolved_count = len(runtime_state.unresolved_candidates or [])
+            discarded_count = len(runtime_state.discarded_candidates or [])
+            summary_parts = [
+                f"Synthesized {len(findings)} candidate findings from {evidence_backed_candidates} evidence-backed candidates."
+            ]
+            if unresolved_count:
+                summary_parts.append(f"{unresolved_count} unresolved candidates remain for follow-up or verification.")
+            if discarded_count:
+                summary_parts.append(f"{discarded_count} low-value candidates were discarded from the active queue.")
+            summary_text = " ".join(summary_parts)
         return {"findings": findings[:3], "summary": summary_text}

@@ -33,3 +33,4 @@ from .audit_session import (
     AuditToolCallStatus,
 )
 from .report_template import AgentTaskReport
+from .managed_vulnerability import ManagedVulnerability, ManagedVulnerabilityReport

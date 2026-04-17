@@ -355,16 +355,16 @@ class FindingAgent(AnalysisWorkflowAgent):
     REPORT_PHASE_EVIDENCE_CONFIDENCE = 0.85
     PREEMPTIVE_FINALIZATION_THRESHOLDS = {6, 3, 1}
     RECOVERY_KEYWORDS = {
-        "ssrf": ["ssrf", "服务端请求伪造", "server-side request forgery"],
-        "path_traversal": ["path traversal", "路径遍历", "directory traversal", "lfi", "rfi"],
-        "sql_injection": ["sql injection", "sql注入", "sql 注入", "sqli"],
-        "xss": ["xss", "cross-site scripting", "跨站脚本"],
-        "auth_bypass": ["auth bypass", "authentication bypass", "认证绕过", "未授权"],
-        "idor": ["idor", "越权", "对象引用", "对象归属"],
-        "command_injection": ["command injection", "命令注入", "rce", "远程命令执行"],
-        "deserialization": ["deserialization", "反序列化"],
-        "file_upload": ["file upload", "文件上传", "上传绕过"],
-        "business_logic": ["business logic", "业务逻辑", "状态机", "竞态", "race condition"],
+        "ssrf": ["ssrf", "server-side request forgery"],
+        "path_traversal": ["path traversal", "directory traversal", "lfi", "rfi"],
+        "sql_injection": ["sql injection", "sqli"],
+        "xss": ["xss", "cross-site scripting"],
+        "auth_bypass": ["auth bypass", "authentication bypass"],
+        "idor": ["idor", "insecure direct object reference", "broken object authorization"],
+        "command_injection": ["command injection", "rce", "remote code execution"],
+        "deserialization": ["deserialization", "unsafe deserialization"],
+        "file_upload": ["file upload", "arbitrary file upload"],
+        "business_logic": ["business logic", "logic flaw", "race condition"],
     }
     RECOVERY_SEVERITY = {
         "ssrf": "high",
@@ -574,8 +574,9 @@ class FindingAgent(AnalysisWorkflowAgent):
                 "close the current exploit chain, and prepare the Final Answer from collected observations only."
             )
         return (
-            "Stay in evidence collection mode. Keep tracing the active candidate until you either close the exploit chain "
-            "or reach the report-finalization threshold."
+            "Stay in evidence collection mode. Keep tracing the active candidate while runnable candidates or follow-up "
+            "budget still remain. Only switch to report_finalization after a closed exploit chain is proven or the queue "
+            "is saturated with no viable next candidate."
         )
 
     def _candidate_summary(self, candidate) -> Dict[str, Any]:
@@ -598,19 +599,134 @@ class FindingAgent(AnalysisWorkflowAgent):
             and float(summary.get("max_confidence", 0.0) or 0.0) >= self.REPORT_PHASE_EVIDENCE_CONFIDENCE
         )
 
+    def _is_report_ready_candidate(self, candidate) -> bool:
+        summary = self._candidate_summary(candidate)
+        return (
+            summary.get("bundle_count", 0) >= 1
+            and float(summary.get("max_confidence", 0.0) or 0.0) >= self.REPORT_PHASE_EVIDENCE_CONFIDENCE
+        )
+
+    def _candidate_value_score(self, candidate) -> float:
+        summary = self._candidate_summary(candidate)
+        session = self._runtime_state.worker_sessions.get(candidate.id) if self._runtime_state else None
+        bundle_count = int(summary.get("bundle_count", 0) or 0)
+        max_confidence = float(summary.get("max_confidence", 0.0) or 0.0)
+        evidence_gap_count = len(summary.get("evidence_gaps") or [])
+        remaining_budget = int(getattr(session, "remaining_budget", 0) or 0)
+        followup_rounds_left = int(getattr(session, "followup_rounds_left", 0) or 0)
+        return (
+            max_confidence * 1000.0
+            + bundle_count * 100.0
+            + float(getattr(candidate, "priority", 0) or 0)
+            + remaining_budget * 5.0
+            + followup_rounds_left * 10.0
+            - evidence_gap_count * 25.0
+        )
+
+    def _candidate_convergence_snapshot(self, candidate) -> Dict[str, Any]:
+        summary = self._candidate_summary(candidate)
+        session = self._runtime_state.worker_sessions.get(candidate.id) if self._runtime_state else None
+        runnable = bool(
+            session
+            and session.status in {"pending", "active", "needs_followup"}
+            and session.remaining_budget > 0
+        )
+        return {
+            "candidate_id": candidate.id,
+            "priority": candidate.priority,
+            "status": getattr(session, "status", ""),
+            "remaining_budget": int(getattr(session, "remaining_budget", 0) or 0),
+            "followup_rounds_left": int(getattr(session, "followup_rounds_left", 0) or 0),
+            "bundle_count": int(summary.get("bundle_count", 0) or 0),
+            "max_confidence": float(summary.get("max_confidence", 0.0) or 0.0),
+            "evidence_gap_count": len(summary.get("evidence_gaps") or []),
+            "evidence_gaps": list(summary.get("evidence_gaps") or []),
+            "closed_exploit_chain": self._is_closed_exploit_chain_candidate(candidate),
+            "report_ready": self._is_report_ready_candidate(candidate),
+            "runnable": runnable,
+            "value_score": self._candidate_value_score(candidate),
+        }
+
+    def _runnable_candidate_ids(self) -> List[str]:
+        if not self._runtime_state:
+            return []
+        return [
+            snapshot["candidate_id"]
+            for snapshot in (self._candidate_convergence_snapshot(candidate) for candidate in self._runtime_state.queue)
+            if snapshot["runnable"]
+        ]
+
+    def _build_convergence_decision(self, current_iteration: Optional[int] = None) -> Dict[str, Any]:
+        runtime_state = self._runtime_state
+        rounds_left = self._rounds_left(current_iteration)
+        if not runtime_state:
+            return {
+                "phase": "evidence_collection",
+                "reason": "",
+                "stop_condition": "",
+                "rounds_left": rounds_left,
+                "runnable_candidate_ids": [],
+                "report_ready_candidate_ids": [],
+                "closed_candidate_ids": [],
+                "selected_candidate_id": "",
+                "candidate_snapshots": [],
+            }
+
+        candidate_snapshots = [self._candidate_convergence_snapshot(candidate) for candidate in runtime_state.queue]
+        closed_candidates = [snapshot for snapshot in candidate_snapshots if snapshot["closed_exploit_chain"]]
+        report_ready_candidates = [snapshot for snapshot in candidate_snapshots if snapshot["report_ready"]]
+        runnable_candidates = [snapshot for snapshot in candidate_snapshots if snapshot["runnable"]]
+        selected_candidate_id = runtime_state.active_candidate_id or ""
+        if closed_candidates:
+            selected_candidate_id = max(closed_candidates, key=lambda item: item["value_score"])["candidate_id"]
+        elif report_ready_candidates and not runnable_candidates:
+            selected_candidate_id = max(report_ready_candidates, key=lambda item: item["value_score"])["candidate_id"]
+        elif runnable_candidates:
+            selected_candidate_id = max(runnable_candidates, key=lambda item: item["value_score"])["candidate_id"]
+        elif candidate_snapshots:
+            selected_candidate_id = max(candidate_snapshots, key=lambda item: item["value_score"])["candidate_id"]
+
+        decision = {
+            "phase": "evidence_collection",
+            "reason": "",
+            "stop_condition": "",
+            "rounds_left": rounds_left,
+            "runnable_candidate_ids": [snapshot["candidate_id"] for snapshot in runnable_candidates],
+            "report_ready_candidate_ids": [snapshot["candidate_id"] for snapshot in report_ready_candidates],
+            "closed_candidate_ids": [snapshot["candidate_id"] for snapshot in closed_candidates],
+            "selected_candidate_id": selected_candidate_id,
+            "candidate_snapshots": candidate_snapshots[:8],
+        }
+        if closed_candidates:
+            decision["phase"] = "report_finalization"
+            decision["reason"] = "closed_exploit_chain_candidate"
+            decision["stop_condition"] = "closed_exploit_chain_found"
+            return decision
+        if not runnable_candidates and report_ready_candidates:
+            decision["phase"] = "report_finalization"
+            decision["reason"] = "coverage_saturated"
+            decision["stop_condition"] = "coverage_saturated_with_reportable_evidence"
+            return decision
+        if not runnable_candidates:
+            decision["phase"] = "report_finalization"
+            decision["reason"] = "queue_exhausted"
+            decision["stop_condition"] = "queue_exhausted_without_reportable_evidence"
+            return decision
+        if rounds_left <= 0:
+            decision["phase"] = "report_finalization"
+            decision["reason"] = "controller_budget_exhausted"
+            decision["stop_condition"] = "controller_budget_exhausted"
+        return decision
+
     def _select_reporting_candidate(self):
         if not self._runtime_state:
             return None
-        closed_candidates = [candidate for candidate in self._runtime_state.queue if self._is_closed_exploit_chain_candidate(candidate)]
-        if closed_candidates:
-            return max(
-                closed_candidates,
-                key=lambda candidate: (
-                    float(self._candidate_summary(candidate).get("max_confidence", 0.0) or 0.0),
-                    len(candidate.evidence_bundle_ids),
-                    candidate.priority,
-                ),
-            )
+        decision = self._build_convergence_decision(self._iteration)
+        selected_candidate_id = str(decision.get("selected_candidate_id") or "")
+        if selected_candidate_id:
+            for candidate in self._runtime_state.queue:
+                if candidate.id == selected_candidate_id:
+                    return candidate
         current = self._current_candidate()
         if current:
             return current
@@ -636,13 +752,16 @@ class FindingAgent(AnalysisWorkflowAgent):
     def _update_runtime_phase(self, current_iteration: Optional[int] = None) -> None:
         if not self._runtime_state:
             return
+        self._refresh_candidate_backlog()
+        decision = self._build_convergence_decision(current_iteration)
+        self._runtime_state.metrics["convergence"] = decision
         if self._runtime_state.phase == "report_finalization":
             return
-        if any(self._is_closed_exploit_chain_candidate(candidate) for candidate in self._runtime_state.queue):
-            self._enter_report_finalization_phase("closed_exploit_chain_candidate")
+        if decision.get("phase") == "report_finalization":
+            self._enter_report_finalization_phase(str(decision.get("reason") or "coverage_saturated"))
             return
-        if self._rounds_left(current_iteration) <= self.REPORT_FINALIZATION_THRESHOLD:
-            self._enter_report_finalization_phase("tail_budget")
+        self._runtime_state.phase = "evidence_collection"
+        self._runtime_state.phase_reason = ""
 
     def _on_iteration_start(self, iteration: int) -> None:
         self._update_runtime_phase(iteration)
@@ -681,7 +800,7 @@ class FindingAgent(AnalysisWorkflowAgent):
             return False
         if self._runtime_state.phase != "report_finalization":
             return False
-        if self._runtime_state.phase_reason == "closed_exploit_chain_candidate":
+        if self._runtime_state.phase_reason in {"closed_exploit_chain_candidate", "coverage_saturated", "queue_exhausted", "controller_budget_exhausted"}:
             return True
         return self._rounds_left(current_iteration) <= 3
 
@@ -875,6 +994,9 @@ class FindingAgent(AnalysisWorkflowAgent):
             "sink_refs": candidate.sink_refs[:3],
             "control_refs": candidate.control_refs[:3],
             "rotation_history": self._runtime_state.rotation_history[-4:],
+            "discarded_candidates": self._runtime_state.discarded_candidates[-4:],
+            "unresolved_candidates": self._runtime_state.unresolved_candidates[-4:],
+            "convergence": self._runtime_state.metrics.get("convergence", {}),
         }
         return [
             self._conversation_history[0],
@@ -915,6 +1037,91 @@ class FindingAgent(AnalysisWorkflowAgent):
             return None
         return self._controller.get_active_candidate(self._runtime_state)
 
+    def _candidate_by_id(self, candidate_id: str):
+        if not self._runtime_state:
+            return None
+        for candidate in self._runtime_state.queue:
+            if candidate.id == candidate_id:
+                return candidate
+        return None
+
+    def _refresh_candidate_backlog(self) -> None:
+        runtime_state = self._runtime_state
+        if not runtime_state:
+            return
+        existing_discarded = {
+            str(item.get("candidate_id") or ""): item
+            for item in runtime_state.discarded_candidates
+            if isinstance(item, dict) and item.get("candidate_id")
+        }
+        retained = []
+        unresolved = []
+        active_removed = False
+        for candidate in runtime_state.queue:
+            snapshot = self._candidate_convergence_snapshot(candidate)
+            session = runtime_state.worker_sessions.get(candidate.id)
+            session_reason = str(getattr(session, "rotation_reason", "") or getattr(session, "status", "") or "").strip()
+            if session and session.status == "budget_exhausted" and not candidate.evidence_bundle_ids:
+                existing_discarded[candidate.id] = {
+                    **snapshot,
+                    "vuln_family": candidate.vuln_family,
+                    "discard_reason": session_reason or "budget_exhausted",
+                }
+                runtime_state.worker_sessions.pop(candidate.id, None)
+                if runtime_state.active_candidate_id == candidate.id:
+                    active_removed = True
+                continue
+            retained.append(candidate)
+            if candidate.evidence_bundle_ids and not snapshot["runnable"] and not snapshot["closed_exploit_chain"]:
+                unresolved.append(
+                    {
+                        **snapshot,
+                        "vuln_family": candidate.vuln_family,
+                        "unresolved_reason": session_reason or "needs_followup",
+                    }
+                )
+        runtime_state.queue = retained
+        runtime_state.discarded_candidates = list(existing_discarded.values())
+        runtime_state.unresolved_candidates = unresolved
+        runtime_state.metrics["queue.active_candidates"] = len(runtime_state.queue)
+        runtime_state.metrics["queue.discarded_candidates"] = len(runtime_state.discarded_candidates)
+        runtime_state.metrics["queue.unresolved_candidates"] = len(runtime_state.unresolved_candidates)
+        active_candidate_id = runtime_state.active_candidate_id
+        if active_removed or (active_candidate_id and not any(candidate.id == active_candidate_id for candidate in runtime_state.queue)):
+            runtime_state.active_candidate_id = runtime_state.queue[0].id if runtime_state.queue else None
+        elif not active_candidate_id and runtime_state.queue:
+            runtime_state.active_candidate_id = runtime_state.queue[0].id
+
+    def _promote_best_runnable_candidate(self):
+        if not self._runtime_state:
+            return None
+        if self._runtime_state.phase == "report_finalization":
+            return self._current_candidate()
+        decision = self._build_convergence_decision(self._iteration)
+        self._runtime_state.metrics["convergence"] = decision
+        selected_candidate_id = str(decision.get("selected_candidate_id") or "")
+        runnable_candidate_ids = set(decision.get("runnable_candidate_ids") or [])
+        if not selected_candidate_id or selected_candidate_id not in runnable_candidate_ids:
+            return self._current_candidate()
+        current = self._current_candidate()
+        if current and current.id == selected_candidate_id:
+            session = self._runtime_state.worker_sessions.get(current.id)
+            if session and session.status in {"pending", "needs_followup", "paused", "rotated"}:
+                session.status = "active"
+            return current
+        if current:
+            current_session = self._runtime_state.worker_sessions.get(current.id)
+            if current_session and current_session.status == "active":
+                current_session.status = "paused"
+        next_candidate = self._candidate_by_id(selected_candidate_id)
+        if not next_candidate:
+            return current
+        next_session = self._runtime_state.worker_sessions.get(next_candidate.id)
+        if next_session and next_session.status in {"pending", "needs_followup", "paused", "rotated", "active"}:
+            next_session.status = "active"
+        self._runtime_state.active_candidate_id = next_candidate.id
+        return next_candidate
+
     def _advance_candidate(self, reason: str = "") -> None:
         candidate = self._current_candidate()
         if not candidate or not self._runtime_state:
@@ -924,6 +1131,8 @@ class FindingAgent(AnalysisWorkflowAgent):
         if reason and reason not in candidate.business_flow_notes:
             candidate.business_flow_notes.append(reason)
         self._controller.rotate_candidate(self._runtime_state, reason or "candidate rotated")
+        self._refresh_candidate_backlog()
+        self._promote_best_runnable_candidate()
 
     async def _execute_step_actions(self, step, failed_tool_calls: Dict[str, int]) -> str:
         if self._final_only_mode_active():
@@ -974,9 +1183,10 @@ class FindingAgent(AnalysisWorkflowAgent):
                 self._skill_bootstrap_state["loaded"] = True
 
             worker_result = None
-            if active_candidate:
+            candidate_for_action = active_candidate
+            if candidate_for_action:
                 worker_result = self._worker.record_tool_result(
-                    active_candidate,
+                    candidate_for_action,
                     invocation.action,
                     invocation.action_input or {},
                     observation,
@@ -985,10 +1195,12 @@ class FindingAgent(AnalysisWorkflowAgent):
                     self._runtime_state.coverage.covered_files.update(worker_result.coverage_delta["file_paths"])
                 self._controller.consume_worker_budget(
                     self._runtime_state,
-                    active_candidate.id,
+                    candidate_for_action.id,
                     spent=1,
                     reason="worker budget exhausted",
                 )
+                self._refresh_candidate_backlog()
+                self._promote_best_runnable_candidate()
             evidence_delta = len(worker_result.evidence_bundle_ids) if worker_result else 0
             loop_decision = self._loop_detector.register(
                 invocation.action,
@@ -1009,21 +1221,27 @@ class FindingAgent(AnalysisWorkflowAgent):
                 f"{observation}{observation_suffix}"
             )
 
-            if active_candidate and worker_result and worker_result.evidence_bundle_ids:
-                active_candidate.status = worker_result.status
-                self._maybe_checkpoint_candidate(active_candidate)
+            if candidate_for_action and worker_result and worker_result.evidence_bundle_ids:
+                candidate_for_action.status = worker_result.status
+                self._maybe_checkpoint_candidate(candidate_for_action)
                 self._update_runtime_phase(self._iteration)
                 if self._runtime_state and self._runtime_state.phase == "report_finalization":
                     active_candidate = self._current_candidate()
-                elif len(active_candidate.evidence_bundle_ids) >= 2:
+                elif len(candidate_for_action.evidence_bundle_ids) >= 2:
                     self._controller.complete_candidate(
                         self._runtime_state,
-                        active_candidate.id,
+                        candidate_for_action.id,
                         reason="Structured evidence captured for this candidate; rotating to the next candidate.",
                     )
-                active_candidate = self._current_candidate()
+                    self._refresh_candidate_backlog()
+                    self._promote_best_runnable_candidate()
+                    active_candidate = self._current_candidate()
+                else:
+                    active_candidate = self._current_candidate()
             elif loop_decision.status == "block":
                 self._advance_candidate(loop_decision.message)
+                active_candidate = self._current_candidate()
+            else:
                 active_candidate = self._current_candidate()
 
         if not observations:
@@ -1164,20 +1382,36 @@ Audit priorities:
                 "phase": runtime_state.phase,
                 "max_iterations": self.config.max_iterations,
                 "report_finalization_threshold": self.REPORT_FINALIZATION_THRESHOLD,
+                "max_active_candidates": runtime_state.plan.max_active_candidates,
+                "initial_queue_suppressed": runtime_state.metrics.get("queue.initial_suppressed_candidates", 0),
                 "entry_points": runtime_state.coverage.entry_points[:12],
                 "uncovered_priority_paths": runtime_state.coverage.uncovered_priority_paths[:20],
                 "authz_paths": runtime_state.coverage.authz_paths[:12],
                 "active_candidate_id": runtime_state.active_candidate_id,
                 "phase_transition_rules": [
                     "Switch to report_finalization when a closed exploit-chain candidate exists.",
-                    "Switch to report_finalization when rounds_left <= 6.",
+                    "Stay in evidence_collection while runnable candidates or follow-up budget still remain.",
+                    "Switch to report_finalization when the queue is saturated and only report-ready evidence remains.",
                     "While finalizing, keep the strongest current candidate and stop opening new candidates.",
                 ],
+            }
+            generation_summary = {
+                "Initial queue generation rules": {
+                    "max_active_candidates": runtime_state.plan.max_active_candidates,
+                    "initial_queue_suppressed": runtime_state.metrics.get("queue.initial_suppressed_candidates", 0),
+                    "generation_rules": [
+                        "Keep the active seed queue within max_active_candidates.",
+                        "Prefer vulnerability-family diversity before filling remaining seed slots.",
+                        "Push overflow candidates into discarded_candidates with discard_reason=initial_queue_cap.",
+                    ],
+                }
             }
             message = (
                 message
                 + "\n\nCoverage-first runtime plan:\n"
                 + json.dumps(coverage_summary, ensure_ascii=False, indent=2)
+                + "\n\nInitial queue generation rules:\n"
+                + json.dumps(generation_summary, ensure_ascii=False, indent=2)
                 + "\n\nInitial candidate queue:\n"
                 + json.dumps(queue_preview, ensure_ascii=False, indent=2)
             )
@@ -1334,7 +1568,7 @@ Audit priorities:
 
     def _is_high_signal_thought(self, thought: str) -> bool:
         lowered = (thought or "").lower()
-        if any(token in thought for token in ("漏洞", "风险", "利用链", "存在")):
+        if any(token in thought for token in ("exploit chain", "verified", "critical", "report-ready")):
             return True
         return any(keyword in lowered for keywords in self.RECOVERY_KEYWORDS.values() for keyword in keywords)
 
@@ -1396,10 +1630,10 @@ Audit priorities:
 
     def _extract_file_context(self, observation: str) -> Optional[Dict[str, Any]]:
         text = str(observation or "")
-        file_match = re.search(r"文件:\s*(.+)", text)
+        file_match = re.search(r"闂佸搫鍊稿ú锝呪枎?\s*(.+)", text)
         if not file_match:
             return None
-        line_match = re.search(r"行数:\s*(\d+)(?:-(\d+))?", text)
+        line_match = re.search(r"闁荤偞绋戦張顒勫汲?\s*(\d+)(?:-(\d+))?", text)
         snippet_match = re.search(r"```[a-zA-Z0-9_]*\n(.*?)```", text, re.DOTALL)
         line_start = int(line_match.group(1)) if line_match else 1
         line_end = int(line_match.group(2) or line_start) if line_match else line_start
@@ -1418,7 +1652,7 @@ Audit priorities:
         return None
 
     def _normalize_title(self, vuln_type: str, thought: str) -> str:
-        first_sentence = re.split(r"[。.!?]", thought or "", maxsplit=1)[0].strip()
+        first_sentence = re.split(r"[闂?!?]", thought or "", maxsplit=1)[0].strip()
         if first_sentence:
             return first_sentence[:120]
         return vuln_type.replace("_", " ").title()

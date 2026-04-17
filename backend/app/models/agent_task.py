@@ -1,4 +1,4 @@
-"""
+﻿"""
 Agent 审计任务模型
 支持 AI Agent 自主漏洞挖掘和验证
 """
@@ -64,6 +64,10 @@ class AgentTask(Base):
     
     # 分支信息（仓库项目）
     branch_name = Column(String(255), nullable=True)
+    version_label = Column(String(255), nullable=False)
+    version_tag = Column(String(255), nullable=True)
+    commit_sha = Column(String(64), nullable=True)
+    repository_url_snapshot = Column(Text, nullable=True)
     
     # 排除模式
     exclude_patterns = Column(JSON, nullable=True)

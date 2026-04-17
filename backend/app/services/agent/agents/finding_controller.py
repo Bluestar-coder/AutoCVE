@@ -63,7 +63,8 @@ class FindingController:
     def build_runtime_state(self, context: Dict[str, Any]) -> FindingRuntimeState:
         plan = self.build_audit_plan(context)
         coverage = self.coverage_builder.build(context)
-        queue = self.queue_manager.build_queue(self.build_initial_candidates(context, coverage, plan))
+        raw_queue = self.queue_manager.build_queue(self.build_initial_candidates(context, coverage, plan))
+        queue, suppressed_candidates = self._select_seed_candidates(raw_queue, plan)
         worker_sessions = self.build_worker_sessions(queue, plan)
         active_candidate_id = queue[0].id if queue else None
         if active_candidate_id and active_candidate_id in worker_sessions:
@@ -74,28 +75,46 @@ class FindingController:
             queue=queue,
             worker_sessions=worker_sessions,
             active_candidate_id=active_candidate_id,
+            discarded_candidates=suppressed_candidates,
             metrics={
                 "coverage.entry_points_total": len(coverage.entry_points),
                 "coverage.priority_paths_total": len(coverage.uncovered_priority_paths),
+                "queue.initial_candidates_raw": len(raw_queue),
                 "queue.initial_candidates": len(queue),
+                "queue.initial_suppressed_candidates": len(suppressed_candidates),
             },
         )
 
     def build_audit_plan(self, context: Dict[str, Any]) -> AuditPlan:
         config = context.get("config", {}) or {}
+        workflow = config.get("workflow", {}) or {}
+        finding_config = config.get("finding", {}) or {}
         focus_vulnerabilities = self._ordered_unique(
             context.get("focus_vulnerabilities")
             or config.get("focus_vulnerabilities")
             or self.DEFAULT_VULN_FAMILIES
         )
         target_files = self._ordered_unique(context.get("target_files") or [])
+        raw_max_active_candidates = (
+            context.get("max_active_candidates")
+            or finding_config.get("max_active_candidates")
+            or workflow.get("max_active_candidates")
+            or config.get("max_active_candidates")
+            or 8
+        )
+        try:
+            max_active_candidates = max(1, int(raw_max_active_candidates))
+        except (TypeError, ValueError):
+            max_active_candidates = 8
         return AuditPlan(
             focus_vulnerabilities=focus_vulnerabilities,
             target_files=target_files,
+            max_active_candidates=max_active_candidates,
             stop_conditions=[
                 "closed_exploit_chain_found",
+                "coverage_saturated_with_reportable_evidence",
+                "queue_exhausted_without_reportable_evidence",
                 "controller_budget_exhausted",
-                "top_candidates_fully_reviewed",
             ],
         )
 
@@ -139,6 +158,49 @@ class FindingController:
                 )
                 next_id += 1
         return candidates
+
+    def _select_seed_candidates(
+        self,
+        candidates: List[CandidateCase],
+        plan: AuditPlan,
+    ) -> tuple[List[CandidateCase], List[Dict[str, Any]]]:
+        max_active = max(int(plan.max_active_candidates or 1), 1)
+        if len(candidates) <= max_active:
+            return candidates, []
+
+        selected: List[CandidateCase] = []
+        selected_ids = set()
+        family_represented = set()
+        for candidate in candidates:
+            if candidate.vuln_family in family_represented:
+                continue
+            selected.append(candidate)
+            selected_ids.add(candidate.id)
+            family_represented.add(candidate.vuln_family)
+            if len(selected) >= max_active:
+                break
+        if len(selected) < max_active:
+            for candidate in candidates:
+                if candidate.id in selected_ids:
+                    continue
+                selected.append(candidate)
+                selected_ids.add(candidate.id)
+                if len(selected) >= max_active:
+                    break
+
+        suppressed_candidates = [
+            {
+                "candidate_id": candidate.id,
+                "vuln_family": candidate.vuln_family,
+                "priority": candidate.priority,
+                "entry_point_refs": candidate.entry_point_refs[:2],
+                "sink_refs": candidate.sink_refs[:2],
+                "discard_reason": "initial_queue_cap",
+            }
+            for candidate in candidates
+            if candidate.id not in selected_ids
+        ]
+        return selected, suppressed_candidates
 
     def build_worker_sessions(self, queue: List[CandidateCase], plan: AuditPlan) -> Dict[str, WorkerSession]:
         sessions: Dict[str, WorkerSession] = {}

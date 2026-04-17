@@ -330,6 +330,14 @@ class PatternMatchTool(AgentTool):
     @property
     def args_schema(self):
         return PatternMatchInput
+
+    def is_concurrency_safe(self, **kwargs) -> bool:
+        del kwargs
+        return True
+
+    def is_read_only(self, **kwargs) -> bool:
+        del kwargs
+        return True
     
     async def _execute(
         self,
