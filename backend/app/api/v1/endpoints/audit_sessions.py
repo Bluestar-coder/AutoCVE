@@ -298,7 +298,7 @@ async def continue_runtime_session(*, session_id: str, content: str, db: AsyncSe
             return
         raise
     try:
-        await bridge.continue_session(session_id=session_id, model_name=model_name, max_turns=max_turns)
+        await bridge.continue_dialogue_session(session_id=session_id, model_name=model_name, max_turns=max_turns)
     finally:
         try:
             await sandbox_manager.cleanup()

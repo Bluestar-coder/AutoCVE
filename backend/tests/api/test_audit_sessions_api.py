@@ -373,3 +373,54 @@ async def test_stream_follow_up_message_for_runtime_session_uses_runtime_continu
     assert len(messages.json()) == 2
     assert messages.json()[0]["metadata"]["kind"] == "follow_up_user_message"
     assert messages.json()[1]["metadata"]["kind"] == "runtime_follow_up_response"
+
+
+@pytest.mark.asyncio
+async def test_continue_runtime_session_uses_dialogue_continuation(monkeypatch):
+    session = AuditSession(
+        project_id="project-1",
+        task_id="task-1",
+        runtime_stack="runtime",
+        state="completed",
+    )
+
+    class DummySandbox:
+        def __init__(self):
+            self.cleaned = False
+
+        async def cleanup(self):
+            self.cleaned = True
+
+    class DummyBridge:
+        def __init__(self):
+            self.dialogue_calls: list[tuple[str, str, int | None]] = []
+            self.report_calls: list[tuple[str, str, int | None]] = []
+
+        async def continue_dialogue_session(self, *, session_id: str, model_name: str, max_turns: int | None):
+            self.dialogue_calls.append((session_id, model_name, max_turns))
+
+        async def continue_session(self, *, session_id: str, model_name: str, max_turns: int | None):
+            self.report_calls.append((session_id, model_name, max_turns))
+            raise AssertionError('audit session follow-up should not use final-report continuation')
+
+    bridge = DummyBridge()
+    sandbox = DummySandbox()
+
+    class DummyDb:
+        async def get(self, model, session_id):
+            return session
+
+    async def fake_build_runtime_follow_up_context(*, session, db):
+        return bridge, sandbox, 'finding-runtime', None
+
+    monkeypatch.setattr(audit_sessions_endpoint, '_build_runtime_follow_up_context', fake_build_runtime_follow_up_context, raising=False)
+
+    await audit_sessions_endpoint.continue_runtime_session(
+        session_id='session-1',
+        content='please keep auditing',
+        db=DummyDb(),
+    )
+
+    assert bridge.dialogue_calls == [('session-1', 'finding-runtime', None)]
+    assert bridge.report_calls == []
+    assert sandbox.cleaned is True

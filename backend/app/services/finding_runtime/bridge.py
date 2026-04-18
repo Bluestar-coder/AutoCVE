@@ -303,6 +303,39 @@ class FindingRuntimeBridge:
             fallback_payload_builder=self._default_fallback_payload,
         )
 
+    async def continue_dialogue_session(
+        self,
+        *,
+        session_id: str,
+        model_name: str = "finding-runtime",
+        max_turns: int | None = None,
+    ) -> dict[str, Any]:
+        model_client = RuntimeLLMModelClient(llm_service=self._llm_service, agent_type="finding")
+        tool_registry = self._build_tool_registry()
+        tool_orchestrator = ToolOrchestrator(session_store=self._session_store, tool_registry=tool_registry)
+        runner = FindingRuntimeRunner(
+            session_store=self._session_store,
+            model_client=model_client,
+            tool_registry=tool_registry,
+            tool_orchestrator=tool_orchestrator,
+            max_turns=max_turns,
+        )
+        adapter = FindingRuntimeAdapter(
+            session_store=self._session_store,
+            runner=runner,
+            skill_catalog=RuntimeSkillCatalog(),
+            memory_manager=RuntimeMemoryManager(session_factory=self._session_store._session_factory),
+        )
+        await adapter.refresh_session_context(session_id=session_id)
+        runner_result = await runner.run_once(session_id=session_id, model_name=model_name)
+        snapshot = self._session_store.load_session_snapshot(session_id)
+        return {
+            "session_id": session_id,
+            "runner_result": runner_result,
+            "turn_count": len(snapshot.turns),
+            "tool_call_count": len(snapshot.tool_calls),
+        }
+
     async def continue_session_until_payload(
         self,
         *,
