@@ -8,6 +8,7 @@ LiteLLM 统一适配器
 - 流式输出: 支持逐 token 返回
 """
 
+import json
 import logging
 from typing import Dict, Any, Optional, List
 from ..base_adapter import BaseLLMAdapter
@@ -23,6 +24,14 @@ from ..types import (
 from ..prompt_cache import prompt_cache_manager, estimate_tokens
 
 logger = logging.getLogger(__name__)
+
+
+def _token_text(value: Any) -> str:
+    if isinstance(value, str):
+        return value
+    if value is None:
+        return ""
+    return json.dumps(value, ensure_ascii=False)
 
 
 class LiteLLMAdapter(BaseLLMAdapter):
@@ -188,7 +197,7 @@ class LiteLLMAdapter(BaseLLMAdapter):
         litellm.drop_params = True
         
         # 构建消息
-        messages = [{"role": msg.role, "content": msg.content} for msg in request.messages]
+        messages = [msg.to_dict() for msg in request.messages]
         
         # 🔥 Prompt Caching: 为支持的 LLM 添加缓存标记
         cache_enabled = False
@@ -197,7 +206,7 @@ class LiteLLMAdapter(BaseLLMAdapter):
             system_tokens = 0
             for msg in messages:
                 if msg.get("role") == "system":
-                    system_tokens += estimate_tokens(msg.get("content", ""))
+                    system_tokens += estimate_tokens(_token_text(msg.get("content", "")))
             
             messages, cache_enabled = prompt_cache_manager.process_messages(
                 messages=messages,
@@ -324,6 +333,7 @@ class LiteLLMAdapter(BaseLLMAdapter):
             usage=usage,
             finish_reason=choice.finish_reason,
             tool_calls=tool_calls or None,
+            reasoning_content=str(getattr(choice.message, "reasoning_content", None) or ""),
         )
 
     async def stream_complete(self, request: LLMRequest):
@@ -338,9 +348,9 @@ class LiteLLMAdapter(BaseLLMAdapter):
         litellm.cache = None
         litellm.drop_params = True
 
-        messages = [{"role": msg.role, "content": msg.content} for msg in request.messages]
+        messages = [msg.to_dict() for msg in request.messages]
         input_tokens_estimate = sum(
-            estimate_tokens(msg["content"], self.config.model) for msg in messages
+            estimate_tokens(_token_text(msg["content"]), self.config.model) for msg in messages
         )
 
         kwargs = {
@@ -366,10 +376,12 @@ class LiteLLMAdapter(BaseLLMAdapter):
         kwargs["timeout"] = self.config.timeout
 
         accumulated_content = ""
+        accumulated_reasoning_content = ""
         final_usage = None
         chunk_count = 0
         partial_tool_calls: Dict[int, Dict[str, Any]] = {}
         emitted_tool_calls: set[int] = set()
+        collected_tool_calls: List[Dict[str, Any]] = []
 
         def _as_dictish(value, field=None, default=None):
             if isinstance(value, dict):
@@ -378,7 +390,30 @@ class LiteLLMAdapter(BaseLLMAdapter):
                 return value.get(field, default)
             if field is None:
                 return value
-            return getattr(value, field, default)
+            direct = getattr(value, field, default)
+            if direct is not default and direct is not None:
+                return direct
+            for extra_name in ("model_extra", "additional_kwargs", "provider_specific_fields"):
+                extra = getattr(value, extra_name, None)
+                if isinstance(extra, dict) and extra.get(field) is not None:
+                    return extra.get(field)
+            model_dump = getattr(value, "model_dump", None)
+            if callable(model_dump):
+                try:
+                    dumped = model_dump()
+                except Exception:
+                    dumped = None
+                if isinstance(dumped, dict) and dumped.get(field) is not None:
+                    return dumped.get(field)
+            legacy_dict = getattr(value, "dict", None)
+            if callable(legacy_dict):
+                try:
+                    dumped = legacy_dict()
+                except Exception:
+                    dumped = None
+                if isinstance(dumped, dict) and dumped.get(field) is not None:
+                    return dumped.get(field)
+            return default
 
         def _iter_delta_tool_calls(delta):
             for raw in _as_dictish(delta, "tool_calls", []) or []:
@@ -390,6 +425,14 @@ class LiteLLMAdapter(BaseLLMAdapter):
                     "name": _as_dictish(function, "name", "") or "",
                     "arguments": _as_dictish(function, "arguments", "") or "",
                 }
+
+        def _delta_reasoning_content(delta) -> str:
+            value = _as_dictish(delta, "reasoning_content", None)
+            if value is None:
+                value = _as_dictish(delta, "reasoning", None)
+            if value is None:
+                return ""
+            return str(value)
 
         def _is_complete_json(arguments: str) -> bool:
             if not arguments or not arguments.strip():
@@ -460,7 +503,17 @@ class LiteLLMAdapter(BaseLLMAdapter):
                 choice = chunk.choices[0]
                 delta = getattr(choice, "delta", None) or {}
                 content = _as_dictish(delta, "content", "") or ""
+                reasoning_content = _delta_reasoning_content(delta)
                 finish_reason = getattr(choice, "finish_reason", None)
+
+                if reasoning_content:
+                    accumulated_reasoning_content += reasoning_content
+                    yield {
+                        "type": "reasoning_delta",
+                        "content": reasoning_content,
+                        "reasoning_content": reasoning_content,
+                        "accumulated": accumulated_reasoning_content,
+                    }
 
                 if content:
                     accumulated_content += content
@@ -471,10 +524,12 @@ class LiteLLMAdapter(BaseLLMAdapter):
                     }
 
                 for tool_call in _collect_ready_tool_calls(delta):
+                    collected_tool_calls.append(tool_call)
                     yield {"type": "tool_call", "tool_call": tool_call}
 
                 if finish_reason:
                     for tool_call in _collect_ready_tool_calls(delta, force_flush=True):
+                        collected_tool_calls.append(tool_call)
                         yield {"type": "tool_call", "tool_call": tool_call}
                     if not final_usage:
                         output_tokens_estimate = estimate_tokens(accumulated_content, self.config.model)
@@ -490,13 +545,16 @@ class LiteLLMAdapter(BaseLLMAdapter):
                     yield {
                         "type": "done",
                         "content": accumulated_content,
+                        "reasoning_content": accumulated_reasoning_content,
                         "usage": final_usage,
                         "finish_reason": finish_reason,
+                        "tool_calls": list(collected_tool_calls),
                     }
                     break
             else:
                 if accumulated_content or partial_tool_calls:
                     for tool_call in _collect_ready_tool_calls({}, force_flush=True):
+                        collected_tool_calls.append(tool_call)
                         yield {"type": "tool_call", "tool_call": tool_call}
                     if not final_usage:
                         output_tokens_estimate = estimate_tokens(accumulated_content, self.config.model)
@@ -508,8 +566,10 @@ class LiteLLMAdapter(BaseLLMAdapter):
                     yield {
                         "type": "done",
                         "content": accumulated_content,
+                        "reasoning_content": accumulated_reasoning_content,
                         "usage": final_usage,
                         "finish_reason": "complete",
+                        "tool_calls": list(collected_tool_calls),
                     }
 
         except litellm.exceptions.RateLimitError as e:
@@ -562,8 +622,8 @@ class LiteLLMAdapter(BaseLLMAdapter):
             }
 
         except Exception as e:
-            error_msg = str(e)
-            logger.error(f"Stream error: {e}")
+            error_msg = str(e).strip() or repr(e)
+            logger.exception("Stream error: %r", e)
             is_rate_limit = any(keyword in error_msg.lower() for keyword in [
                 "ratelimiterror", "rate limit", "429", "resource_exhausted",
                 "quota exceeded", "too many requests"
@@ -588,6 +648,7 @@ class LiteLLMAdapter(BaseLLMAdapter):
                 "type": "error",
                 "error_type": error_type,
                 "error": error_msg,
+                "error_class": e.__class__.__name__,
                 "user_message": user_message,
                 "accumulated": accumulated_content,
                 "usage": {

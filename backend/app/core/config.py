@@ -93,7 +93,6 @@ class Settings(BaseSettings):
     AGENT_TOKEN_BUDGET: int = 100000
     AGENT_TIMEOUT_SECONDS: int = 1800
     FINDING_RUNTIME_STACK_DEFAULT: str = "runtime"
-
     SANDBOX_IMAGE: str = "auditai-sandbox:latest"
     SANDBOX_MEMORY_LIMIT: str = "512m"
     SANDBOX_CPU_LIMIT: float = 1.0

@@ -48,6 +48,7 @@ class RuntimeStopReason(StrEnum):
 
 class RuntimeTerminalAction(StrEnum):
     FINALIZE_FINDING = "finalize_finding"
+    FINALIZE_VULNERABILITY_REPORTS = "finalize_vulnerability_reports"
     FINALIZE_TRIAGE_BATCH = "finalize_triage_batch"
     FINALIZE_TRIAGE = "finalize_triage"
     NATURAL_END_WITHOUT_TERMINAL_ACTION = "natural_end_without_terminal_action"
@@ -102,6 +103,7 @@ class ToolExecutionRecord:
 @dataclass(slots=True)
 class RuntimeModelResponse:
     content: str = ""
+    reasoning_content: str = ""
     tool_calls: list[dict[str, Any]] = field(default_factory=list)
     stop_reason: str | None = None
     recoverable_error_kind: str | None = None

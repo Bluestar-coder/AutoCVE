@@ -268,7 +268,7 @@ async def test_post_follow_up_message_continues_runtime_session(monkeypatch):
     async def override_get_current_user():
         return SimpleNamespace(id="user-1", is_active=True)
 
-    async def fake_continue_runtime_session(*, session_id: str, content: str, db):
+    async def fake_continue_audit_chat_session(*, session_id: str, content: str, db):
         db.add(
             AuditSessionMessage(
                 session_id=session_id,
@@ -281,7 +281,7 @@ async def test_post_follow_up_message_continues_runtime_session(monkeypatch):
         )
         await db.commit()
 
-    monkeypatch.setattr(audit_sessions_endpoint, "continue_runtime_session", fake_continue_runtime_session, raising=False)
+    monkeypatch.setattr(audit_sessions_endpoint, "continue_audit_chat_session", fake_continue_audit_chat_session, raising=False)
 
     app.dependency_overrides[deps.get_db] = override_get_db
     app.dependency_overrides[deps.get_current_user] = override_get_current_user
@@ -397,7 +397,7 @@ async def test_post_follow_up_message_can_generate_report_and_sync(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_stream_follow_up_message_for_runtime_session_uses_runtime_continuation(monkeypatch):
+async def test_stream_follow_up_message_for_runtime_session_uses_audit_chat_runtime(monkeypatch):
     engine = create_async_engine("sqlite+aiosqlite:///:memory:")
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
 
@@ -426,7 +426,7 @@ async def test_stream_follow_up_message_for_runtime_session_uses_runtime_continu
 
     continuation_calls: list[tuple[str, str]] = []
 
-    async def fake_continue_runtime_session(*, session_id: str, content: str, db):
+    async def fake_continue_audit_chat_session(*, session_id: str, content: str, db):
         continuation_calls.append((session_id, content))
         db.add(
             AuditSessionMessage(
@@ -443,7 +443,7 @@ async def test_stream_follow_up_message_for_runtime_session_uses_runtime_continu
     async def fail_build_follow_up_llm_service(*, session, db):
         raise AssertionError("streaming follow-up path should not build a direct LLM follow-up service for runtime sessions")
 
-    monkeypatch.setattr(audit_sessions_endpoint, "continue_runtime_session", fake_continue_runtime_session, raising=False)
+    monkeypatch.setattr(audit_sessions_endpoint, "continue_audit_chat_session", fake_continue_audit_chat_session, raising=False)
     monkeypatch.setattr(audit_sessions_endpoint, "_build_follow_up_llm_service", fail_build_follow_up_llm_service, raising=False)
 
     app.dependency_overrides[deps.get_db] = override_get_db
@@ -619,7 +619,7 @@ async def test_stream_follow_up_message_surfaces_generate_report_error(monkeypat
 
 
 @pytest.mark.asyncio
-async def test_continue_runtime_session_uses_dialogue_continuation(monkeypatch):
+async def test_continue_audit_chat_session_uses_audit_chat_bridge(monkeypatch):
     session = AuditSession(
         project_id="project-1",
         task_id="task-1",
@@ -636,15 +636,10 @@ async def test_continue_runtime_session_uses_dialogue_continuation(monkeypatch):
 
     class DummyBridge:
         def __init__(self):
-            self.dialogue_calls: list[tuple[str, str, int | None]] = []
-            self.report_calls: list[tuple[str, str, int | None]] = []
+            self.chat_calls: list[tuple[str, str, int | None]] = []
 
-        async def continue_dialogue_session(self, *, session_id: str, model_name: str, max_turns: int | None):
-            self.dialogue_calls.append((session_id, model_name, max_turns))
-
-        async def continue_session(self, *, session_id: str, model_name: str, max_turns: int | None):
-            self.report_calls.append((session_id, model_name, max_turns))
-            raise AssertionError('audit session follow-up should not use final-report continuation')
+        async def continue_chat_session(self, *, session_id: str, model_name: str, max_turns: int | None):
+            self.chat_calls.append((session_id, model_name, max_turns))
 
     bridge = DummyBridge()
     sandbox = DummySandbox()
@@ -653,17 +648,16 @@ async def test_continue_runtime_session_uses_dialogue_continuation(monkeypatch):
         async def get(self, model, session_id):
             return session
 
-    async def fake_build_runtime_follow_up_context(*, session, db):
+    async def fake_build_audit_chat_follow_up_context(*, session, db):
         return bridge, sandbox, 'finding-runtime', None
 
-    monkeypatch.setattr(audit_sessions_endpoint, '_build_runtime_follow_up_context', fake_build_runtime_follow_up_context, raising=False)
+    monkeypatch.setattr(audit_sessions_endpoint, '_build_audit_chat_follow_up_context', fake_build_audit_chat_follow_up_context, raising=False)
 
-    await audit_sessions_endpoint.continue_runtime_session(
+    await audit_sessions_endpoint.continue_audit_chat_session(
         session_id='session-1',
         content='please keep auditing',
         db=DummyDb(),
     )
 
-    assert bridge.dialogue_calls == [('session-1', 'finding-runtime', None)]
-    assert bridge.report_calls == []
+    assert bridge.chat_calls == [('session-1', 'finding-runtime', None)]
     assert sandbox.cleaned is True

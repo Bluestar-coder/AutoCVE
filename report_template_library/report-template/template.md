@@ -8,10 +8,6 @@
 - 当前状态: {{ task.status }}
 - 使用模板: {{ template.name if template else '系统默认模板' }}
 
-## 审计流程
-- 编排模式: 固定 DAG / 显式状态机
-- 执行链路: Orchestrator -> Recon -> (Scan -> Triage || Finding) -> Verification
-
 ## 执行摘要
 - 安全评分: {{ summary.security_score if summary.security_score is not none else 'N/A' }}
 - 发现总数: {{ summary.total_findings }}

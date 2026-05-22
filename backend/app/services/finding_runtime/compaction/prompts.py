@@ -43,6 +43,15 @@ _DETAILED_ANALYSIS_INSTRUCTION_PARTIAL = """在提供最终总结前，请用 <a
    - 特别关注收到的用户反馈，尤其是用户要求你改变做法的地方。
 2. 复核技术准确性和完整性，逐项覆盖必要元素。"""
 
+AUDIT_COMPACTION_RETENTION_INSTRUCTIONS = """如果对话内容涉及 Finding 审计、漏洞挖掘或代码安全分析，摘要还必须保留：
+
+- 已确认的漏洞及其 source、sink、PoC 状态；
+- 尚未闭合但值得继续验证的候选线索；
+- 已经覆盖过的攻击面；
+- 尚未覆盖或需要继续搜索的高风险攻击面；
+- 不要把“发现了一个漏洞”总结为“审计已完成”。
+"""
+
 BASE_COMPACT_PROMPT = f"""你的任务是为目前为止的对话创建一份详细总结，重点关注用户的明确请求以及你之前采取的行动。
 总结必须充分捕捉技术细节、代码模式和架构决策，以便后续继续开发时不丢失上下文。
 
@@ -59,6 +68,8 @@ BASE_COMPACT_PROMPT = f"""你的任务是为目前为止的对话创建一份详
 7. 待办任务
 8. 当前工作
 9. 可选下一步
+
+{AUDIT_COMPACTION_RETENTION_INSTRUCTIONS}
 """
 
 PARTIAL_COMPACT_PROMPT = f"""你的任务是为对话的最近部分创建详细总结，也就是早先保留上下文之后的新消息。更早的消息会原样保留，不需要总结。请只关注最近消息中讨论、了解到和完成的内容。
@@ -76,6 +87,8 @@ PARTIAL_COMPACT_PROMPT = f"""你的任务是为对话的最近部分创建详细
 7. 待办任务
 8. 当前工作
 9. 可选下一步
+
+{AUDIT_COMPACTION_RETENTION_INSTRUCTIONS}
 """
 
 PARTIAL_COMPACT_UP_TO_PROMPT = f"""你的任务是为这段对话创建详细总结。该总结会放在后续会话的开头；新的消息会接在总结后继续展开（你在这里看不到它们）。请充分总结，使只阅读你的总结和后续新消息的人也能理解发生了什么并继续工作。
@@ -93,6 +106,8 @@ PARTIAL_COMPACT_UP_TO_PROMPT = f"""你的任务是为这段对话创建详细总
 7. 待办任务
 8. 已完成工作
 9. 继续工作的上下文
+
+{AUDIT_COMPACTION_RETENTION_INSTRUCTIONS}
 """
 
 

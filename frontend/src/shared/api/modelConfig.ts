@@ -21,6 +21,8 @@ export interface AgentModelConfig {
   llmTimeout?: number | null;
   llmTemperature?: number | null;
   llmMaxTokens?: number | null;
+  endpointProtocol?: string;
+  toolMessageFormat?: string;
   maxIterations?: number | null;
   env?: Record<string, string>;
   alwaysThinkingEnabled?: boolean;
@@ -36,6 +38,8 @@ export interface ModelProfileConfig {
   llmTimeout?: number | null;
   llmTemperature?: number | null;
   llmMaxTokens?: number | null;
+  endpointProtocol?: string;
+  toolMessageFormat?: string;
   env?: Record<string, string>;
 }
 
@@ -98,7 +102,15 @@ export async function getModelProviders(): Promise<{ providers: ProviderOption[]
   return response.data;
 }
 
-export async function testGlobalModel(payload: { provider: string; apiKey?: string; model?: string; baseUrl?: string; prompt?: string }) {
+export async function testGlobalModel(payload: {
+  provider: string;
+  apiKey?: string;
+  model?: string;
+  baseUrl?: string;
+  endpointProtocol?: string;
+  toolMessageFormat?: string;
+  prompt?: string;
+}) {
   const response = await apiClient.post('/config/test-llm', payload);
   return response.data;
 }

@@ -207,6 +207,16 @@ class LLMService:
         timeout = int(timeout_ms / 1000) if timeout_ms and timeout_ms > 1000 else int(timeout_ms or getattr(settings, "LLM_TIMEOUT", 300))
         temperature = user_llm_config.get("llmTemperature") if user_llm_config.get("llmTemperature") is not None else float(getattr(settings, "LLM_TEMPERATURE", 0.1))
         max_tokens = int(user_llm_config.get("llmMaxTokens") or getattr(settings, "LLM_MAX_TOKENS", 4096))
+        endpoint_protocol = str(
+            user_llm_config.get("endpointProtocol")
+            or user_llm_config.get("llmEndpointProtocol")
+            or getattr(settings, "LLM_ENDPOINT_PROTOCOL", "openai_compatible")
+        )
+        tool_message_format = str(
+            user_llm_config.get("toolMessageFormat")
+            or user_llm_config.get("llmToolMessageFormat")
+            or getattr(settings, "LLM_TOOL_MESSAGE_FORMAT", "auto")
+        )
         return LLMConfig(
             provider=provider,
             api_key=api_key,
@@ -215,6 +225,8 @@ class LLMService:
             timeout=timeout,
             temperature=temperature,
             max_tokens=max_tokens,
+            endpoint_protocol=endpoint_protocol,
+            tool_message_format=tool_message_format,
         )
 
     @property
@@ -371,13 +383,18 @@ class LLMService:
                 try:
                     async for event in adapter.stream_complete(request):
                         event_type = str((event or {}).get("type") or "").strip().lower()
-                        if event_type in {"token", "tool_call", "done"}:
+                        if event_type in {"token", "reasoning_delta", "tool_call", "done"}:
                             emitted_any_output = True
 
                         if event_type == "error":
                             normalized_error = self._normalize_stream_error_event(event)
+                            has_partial_output = (
+                                emitted_any_output
+                                or bool((event or {}).get("accumulated"))
+                                or bool((event or {}).get("tool_calls"))
+                            )
                             if (
-                                not emitted_any_output
+                                not has_partial_output
                                 and attempt < retry_config.max_attempts - 1
                                 and retry_config.should_retry(normalized_error)
                             ):
@@ -439,6 +456,30 @@ class LLMService:
             return LLMConnectionError(error_message)
         if error_type == "quota_exceeded":
             return Exception(error_message)
+        lowered = error_message.lower()
+        non_retryable_tokens = (
+            "authentication",
+            "api key",
+            "invalid api key",
+            "quota",
+            "billing",
+            "insufficient",
+            "context length",
+            "maximum context",
+            "invalid_request",
+            "invalid request",
+            "tool schema",
+            "schema",
+        )
+        if any(token in lowered for token in non_retryable_tokens):
+            return Exception(error_message)
+        generic_unknown_messages = {
+            "",
+            "llm streaming request failed",
+            "llm streaming request failed. please retry.",
+        }
+        if error_type in {"", "unknown"} and lowered in generic_unknown_messages:
+            return LLMConnectionError(error_message or "LLM streaming request failed. Please retry.")
         return self._normalize_retryable_llm_error(Exception(error_message))
 
     @staticmethod
@@ -558,7 +599,7 @@ class LLMService:
         config = self.get_agent_config(agent_type)
         adapter = LLMFactory.create_adapter(config)
         request = LLMRequest(
-            messages=[LLMMessage(role=item["role"], content=item["content"]) for item in messages],
+            messages=[LLMMessage.from_dict(item) for item in messages],
             temperature=temperature,
             max_tokens=max_tokens,
             tools=tools,
@@ -579,6 +620,7 @@ class LLMService:
             "usage": usage or {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
             "finish_reason": response.finish_reason,
             "tool_calls": getattr(response, "tool_calls", None) or [],
+            "reasoning_content": getattr(response, "reasoning_content", None) or "",
             "tools_ignored": False,
         }
 
@@ -608,7 +650,7 @@ class LLMService:
         config = self.get_agent_config(agent_type)
         adapter = LLMFactory.create_adapter(config)
         request = LLMRequest(
-            messages=[LLMMessage(role=item["role"], content=item["content"]) for item in messages],
+            messages=[LLMMessage.from_dict(item) for item in messages],
             temperature=temperature,
             max_tokens=max_tokens,
             tools=tools,
@@ -643,6 +685,7 @@ class LLMService:
             "content": content,
             "usage": result.get("usage") or {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
             "tool_calls": result.get("tool_calls") or [],
+            "reasoning_content": result.get("reasoning_content") or "",
             "finish_reason": result.get("finish_reason") or "stop",
         }
 

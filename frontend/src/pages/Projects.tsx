@@ -488,8 +488,8 @@ export default function Projects() {
         });
       });
 
-      toast.success(`项目 "${projectToDelete.name}" 已移到回收站`, {
-        description: '您可以在回收站中恢复此项目',
+      toast.success(`项目 "${projectToDelete.name}" 已永久删除`, {
+        description: '项目记录和关联审计数据已删除，无法从回收站恢复',
         duration: 4000
       });
       setShowDeleteDialog(false);
@@ -1008,7 +1008,7 @@ export default function Projects() {
                 </div>
 
                 <div className="rounded border border-sky-500/30 bg-sky-500/10 p-3 text-xs font-mono text-sky-300">
-                  目录规范: 先将项目解压到 AuditAI/projects/[项目名]/，再在这里登记为正式项目，之后可直接在 Agent直审 中打开。
+                  目录规范: 先将项目解压到 AuditAI/projects/[项目名]/，再在这里登记为正式项目。
                 </div>
 
                 <div className="flex justify-end space-x-4 pt-4 border-t border-border">
@@ -1195,12 +1195,6 @@ export default function Projects() {
                     <Code className="w-3 h-3 mr-2" />
                     查看详情
                     <ArrowUpRight className="w-3 h-3 ml-auto" />
-                  </Button>
-                </Link>
-                <Link to={`/agent-direct-audit?projectId=${project.id}`}>
-                  <Button size="sm" variant="outline" className="w-full cyber-btn-outline h-8 text-xs">
-                    <HardDrive className="w-3 h-3 mr-2" />
-                    直审
                   </Button>
                 </Link>
                 <Button size="sm" className="cyber-btn-primary h-8 text-xs" onClick={() => handleCreateTask(project.id)}>
@@ -1638,7 +1632,7 @@ export default function Projects() {
               确认删除
             </AlertDialogTitle>
             <AlertDialogDescription className="text-muted-foreground font-mono">
-              您确定要移动 <span className="font-bold text-rose-400">"{projectToDelete?.name}"</span> 到回收站吗？
+              您确定要永久删除 <span className="font-bold text-rose-400">"{projectToDelete?.name}"</span> 吗？此操作无法恢复。
             </AlertDialogDescription>
           </AlertDialogHeader>
 
@@ -1646,10 +1640,10 @@ export default function Projects() {
             <div className="bg-sky-500/10 border border-sky-500/30 p-4 rounded">
               <p className="text-sky-300 font-bold mb-2 font-mono uppercase text-sm">系统通知:</p>
               <ul className="list-none text-sky-400/80 space-y-1 text-xs font-mono">
-                <li className="flex items-center gap-2"><span className="text-sky-400">&gt;</span> 项目移至回收站</li>
-                <li className="flex items-center gap-2"><span className="text-sky-400">&gt;</span> 可恢复</li>
-                <li className="flex items-center gap-2"><span className="text-sky-400">&gt;</span> 审计数据保留</li>
-                <li className="flex items-center gap-2"><span className="text-sky-400">&gt;</span> 在回收站中永久删除</li>
+                <li className="flex items-center gap-2"><span className="text-sky-400">&gt;</span> 项目将被永久删除</li>
+                <li className="flex items-center gap-2"><span className="text-sky-400">&gt;</span> 无法通过回收站恢复</li>
+                <li className="flex items-center gap-2"><span className="text-sky-400">&gt;</span> 关联审计数据会一并删除</li>
+                <li className="flex items-center gap-2"><span className="text-sky-400">&gt;</span> 请确认已不再需要此项目</li>
               </ul>
             </div>
           </div>

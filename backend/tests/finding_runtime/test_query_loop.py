@@ -407,6 +407,17 @@ def test_runner_finalize_finding_tool_marks_terminal_completion():
     assert result.final_payload == _valid_finalize_input()
 
 
+def test_finalize_finding_description_explains_terminal_contract_and_required_fields():
+    description = FinalizeFindingTool.description
+
+    assert "提交 Finding 阶段的最终结构化审计结论" in description
+    assert "这是终点工具" in description
+    assert "审计完成且没有确认可报告漏洞时" in description
+    assert "不要调用 FinalizeFinding" in description
+    assert "vulnerability_type、severity、title、description" in description
+    assert "不要只用自然语言宣布“审计完成”" in description
+
+
 def test_runner_rejects_reason_only_finalize_finding_payload_without_terminal_completion():
     store = build_store()
     session_id = store.create_session(project_id="project-1", system_prompt="system")
@@ -610,6 +621,10 @@ def test_query_loop_requires_terminal_action_and_nudges_plain_summary_without_to
     assert result.completion_mode is None
     assert state.messages[-1].name == "terminal_action_nudge"
     assert state.messages[-1].content
+    assert "下一条 assistant 响应必须满足以下二选一" in state.messages[-1].content
+    assert "必须立即调用 Read/Grep/Glob/Skill/PowerShell" in state.messages[-1].content
+    assert '输出严格可解析的 {"findings": [...], "summary": "..."} JSON' in state.messages[-1].content
+    assert "继续就必须实际调用工具" in state.messages[-1].content
     assert state.tool_use_context["missing_terminal_action_nudge_count"] == 1
     assert snapshot.turns[-1].status == "terminal_action_nudge"
 
@@ -1753,3 +1768,136 @@ def test_query_loop_streams_tool_calls_into_executor_before_done():
     assert visible_messages[3].payload["output"] == {"echo": "repo summary"}
     assert [message.name for message in system_messages] == ["tool_progress", "tool_progress"]
     assert client.calls[0]["streaming"] is True
+
+
+def test_query_loop_ignores_duplicate_streaming_tool_call_ids():
+    store = build_store()
+    session_id = store.create_session(project_id="project-1", system_prompt="system")
+    store.append_message(session_id, TranscriptItem(role=RuntimeMessageRole.USER, content="inspect code"))
+    duplicate_tool_call = {"id": "tool-1", "name": "echo", "input": {"text": "repo summary"}}
+    client = StreamingFakeModelClient(
+        stream_events=[
+            {"type": "tool_call", "tool_call": duplicate_tool_call},
+            {"type": "tool_call", "tool_call": duplicate_tool_call},
+            {
+                "type": "done",
+                "content": "",
+                "stop_reason": RuntimeStopReason.COMPLETED.value,
+                "tool_calls": [duplicate_tool_call],
+            },
+        ]
+    )
+    registry = ToolRegistry([EchoTool()])
+    orchestrator = ToolOrchestrator(session_store=store, tool_registry=registry)
+    loop = QueryLoop(session_store=store, model_client=client, tool_registry=registry, tool_orchestrator=orchestrator)
+
+    result = asyncio.run(loop.run_turn(session_id=session_id, model_name="gpt-test"))
+    snapshot = store.load_session_snapshot(session_id)
+    visible_messages = _messages_without_system(snapshot)
+
+    assert result.transition is RuntimeContinueReason.NEXT_TURN
+    assert [message.role for message in visible_messages] == [
+        RuntimeMessageRole.USER.value,
+        RuntimeMessageRole.ASSISTANT.value,
+        RuntimeMessageRole.TOOL_USE.value,
+        RuntimeMessageRole.TOOL_RESULT.value,
+    ]
+    assert [message.payload["tool_use_id"] for message in visible_messages if message.role == RuntimeMessageRole.TOOL_USE.value] == ["tool-1"]
+    assert [message.payload["tool_use_id"] for message in visible_messages if message.role == RuntimeMessageRole.TOOL_RESULT.value] == ["tool-1"]
+    assert len(snapshot.tool_calls) == 1
+
+
+def test_query_loop_persists_streaming_reasoning_content_for_tool_call_replay():
+    store = build_store()
+    session_id = store.create_session(project_id="project-1", system_prompt="system")
+    store.append_message(session_id, TranscriptItem(role=RuntimeMessageRole.USER, content="load skill"))
+    client = StreamingFakeModelClient(
+        stream_events=[
+            {"type": "reasoning_delta", "content": "Need the skill first.", "accumulated": "Need the skill first."},
+            {"type": "tool_call", "tool_call": {"id": "tool-1", "name": "echo", "input": {"text": "repo summary"}}},
+            {
+                "type": "done",
+                "content": "",
+                "reasoning_content": "Need the skill first.",
+                "stop_reason": RuntimeStopReason.COMPLETED.value,
+            },
+        ]
+    )
+    registry = ToolRegistry([EchoTool()])
+    orchestrator = ToolOrchestrator(session_store=store, tool_registry=registry)
+    loop = QueryLoop(session_store=store, model_client=client, tool_registry=registry, tool_orchestrator=orchestrator)
+
+    result = asyncio.run(loop.run_turn(session_id=session_id, model_name="gpt-test"))
+    snapshot = store.load_session_snapshot(session_id)
+    visible_messages = _messages_without_system(snapshot)
+
+    assert result.transition is RuntimeContinueReason.NEXT_TURN
+    assert visible_messages[1].role == RuntimeMessageRole.ASSISTANT.value
+    assert visible_messages[1].content == ""
+    assert visible_messages[1].payload["reasoning_content"] == "Need the skill first."
+    assert visible_messages[2].role == RuntimeMessageRole.TOOL_USE.value
+
+
+def test_query_loop_forwards_streaming_reasoning_to_event_sink():
+    store = build_store()
+    session_id = store.create_session(project_id="project-1", system_prompt="system")
+    store.append_message(session_id, TranscriptItem(role=RuntimeMessageRole.USER, content="inspect auth"))
+    client = StreamingFakeModelClient(
+        stream_events=[
+            {"type": "reasoning_delta", "content": "Need to inspect auth middleware.", "accumulated": "Need to inspect auth middleware."},
+            {
+                "type": "done",
+                "content": "",
+                "reasoning_content": "Need to inspect auth middleware.",
+                "stop_reason": RuntimeStopReason.COMPLETED.value,
+            },
+        ]
+    )
+    events = []
+    loop = QueryLoop(
+        session_store=store,
+        model_client=client,
+        tool_registry=ToolRegistry(),
+        tool_orchestrator=None,
+        event_sink=events.append,
+    )
+
+    asyncio.run(loop.run_turn(session_id=session_id, model_name="gpt-test"))
+
+    reasoning_events = [event for event in events if event.get("type") == "reasoning_delta"]
+    assert reasoning_events
+    assert reasoning_events[-1]["accumulated"] == "Need to inspect auth middleware."
+
+
+def test_query_loop_preserves_raw_stream_error_in_event_sink_and_checkpoint():
+    store = build_store()
+    session_id = store.create_session(project_id="project-1", system_prompt="system")
+    store.append_message(session_id, TranscriptItem(role=RuntimeMessageRole.USER, content="inspect auth"))
+    client = StreamingFakeModelClient(
+        stream_events=[
+            {
+                "type": "error",
+                "error_type": "connection",
+                "error": "upstream 502 from relay: provider trace id abc123",
+                "user_message": "LLM streaming request failed. Please retry.",
+            },
+        ]
+    )
+    events = []
+    loop = QueryLoop(
+        session_store=store,
+        model_client=client,
+        tool_registry=ToolRegistry(),
+        tool_orchestrator=None,
+        event_sink=events.append,
+    )
+
+    result = asyncio.run(loop.run_turn(session_id=session_id, model_name="gpt-test"))
+    snapshot = store.load_session_snapshot(session_id)
+
+    assert result.stop_reason is RuntimeStopReason.MODEL_ERROR
+    error_events = [event for event in events if event.get("type") == "error"]
+    assert error_events
+    assert error_events[-1]["error"] == "upstream 502 from relay: provider trace id abc123"
+    assert error_events[-1]["user_message"] == "LLM streaming request failed. Please retry."
+    assert "upstream 502 from relay" in snapshot.checkpoints[-1].state_payload["error"]

@@ -31,6 +31,7 @@ export function useAuditSessionChatStream({
     sessionId: string,
     content: string,
     mode?: AuditSessionMessageMode,
+    selectedSkillRefs?: string[],
     handlers?: {
       onEvent?: (event: AuditSessionStreamEvent) => void;
       signal?: AbortSignal;
@@ -140,11 +141,24 @@ export function useAuditSessionChatStream({
   const sendMessage = useCallback(async (
     content: string,
     mode: AuditSessionMessageMode = "chat",
+    selectedSkillRefs: string[] = [],
   ): Promise<AuditSessionStreamResult> => {
     if (!sessionId) {
       throw new Error("Missing session id");
     }
-    return runStreamRequest((handlers) => streamMessage(sessionId, content, mode, handlers));
+    return runStreamRequest((handlers) => {
+      if (streamMessage === streamAuditSessionMessage) {
+        return streamMessage(sessionId, content, mode, selectedSkillRefs, handlers);
+      }
+      return (streamMessage as unknown as (
+        sessionId: string,
+        content: string,
+        handlers?: {
+          onEvent?: (event: AuditSessionStreamEvent) => void;
+          signal?: AbortSignal;
+        },
+      ) => Promise<AuditSessionStreamResult>)(sessionId, content, handlers);
+    });
   }, [runStreamRequest, sessionId, streamMessage]);
 
   return {

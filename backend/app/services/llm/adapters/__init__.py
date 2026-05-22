@@ -8,6 +8,7 @@ LLM适配器模块
 
 # LiteLLM 统一适配器
 from .litellm_adapter import LiteLLMAdapter
+from .anthropic_adapter import AnthropicAdapter
 
 # 原生适配器 (用于 API 格式特殊的提供商)
 from .baidu_adapter import BaiduAdapter
@@ -16,6 +17,7 @@ from .doubao_adapter import DoubaoAdapter
 
 __all__ = [
     "LiteLLMAdapter",
+    "AnthropicAdapter",
     "BaiduAdapter",
     "MinimaxAdapter",
     "DoubaoAdapter",

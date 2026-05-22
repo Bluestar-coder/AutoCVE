@@ -13,7 +13,7 @@ import type {
   AgentTreeResponse,
   ConnectionStatus,
 } from "../types";
-import { createLogItem, filterLogsByAgent, buildAgentTree } from "../utils";
+import { createLogItem, filterLogsByAgent, buildAgentTree, dedupeActivityLogs } from "../utils";
 import type { AgentTreeNode } from "@/shared/api/agentTasks";
 
 // ============ Initial State ============
@@ -56,14 +56,14 @@ function agentAuditReducer(state: AgentAuditState, action: AgentAuditAction): Ag
       return { ...state, agentTree: action.payload };
 
     case 'SET_LOGS':
-      return { ...state, logs: action.payload };
+      return { ...state, logs: dedupeActivityLogs(action.payload) };
 
     case 'ADD_LOG': {
       const { id: providedId, ...logData } = action.payload;
       const newLog = providedId
         ? { ...createLogItem(logData), id: providedId }
         : createLogItem(logData);
-      return { ...state, logs: [...state.logs, newLog] };
+      return { ...state, logs: dedupeActivityLogs([...state.logs, newLog]) };
     }
 
     case 'UPDATE_LOG': {

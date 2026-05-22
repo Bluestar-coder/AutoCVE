@@ -20,7 +20,6 @@ import { api, dbMode, isDemoMode } from "@/shared/config/database";
 import type { Project, AuditTask, ProjectStats, UnifiedTask } from "@/shared/types";
 import { Link } from "react-router-dom";
 import { toast } from "sonner";
-import { getRuleSets } from "@/shared/api/rules";
 import { getPromptTemplates } from "@/shared/api/prompts";
 import { getAgentTasks, type AgentTask } from "@/shared/api/agentTasks";
 
@@ -31,7 +30,6 @@ export default function Dashboard() {
   const [loading, setLoading] = useState(true);
   const [issueTypeData, setIssueTypeData] = useState<Array<{ name: string; value: number; color: string }>>([]);
   const [qualityTrendData, setQualityTrendData] = useState<Array<{ date: string; score: number }>>([]);
-  const [ruleStats, setRuleStats] = useState({ total: 0, enabled: 0 });
   const [templateStats, setTemplateStats] = useState({ total: 0, active: 0 });
 
   useEffect(() => {
@@ -142,13 +140,7 @@ export default function Dashboard() {
       }
 
       try {
-        const [rulesRes, promptsRes] = await Promise.all([
-          getRuleSets(),
-          getPromptTemplates(),
-        ]);
-        const totalRules = rulesRes.items.reduce((acc, rs) => acc + rs.rules_count, 0);
-        const enabledRules = rulesRes.items.reduce((acc, rs) => acc + rs.enabled_rules_count, 0);
-        setRuleStats({ total: totalRules, enabled: enabledRules });
+        const promptsRes = await getPromptTemplates();
         setTemplateStats({
           total: promptsRes.items.length,
           active: promptsRes.items.filter(t => t.is_active).length
@@ -660,15 +652,6 @@ export default function Dashboard() {
                 <span className="text-base text-muted-foreground">待解决问题</span>
                 <span className="text-base font-bold text-amber-400">
                   {stats ? stats.total_issues - stats.resolved_issues : 0}
-                </span>
-              </div>
-              <div className="flex items-center justify-between">
-                <span className="text-base text-muted-foreground flex items-center gap-1">
-                  <Shield className="w-4 h-4" />
-                  审计规则
-                </span>
-                <span className="text-base font-bold text-violet-400">
-                  {ruleStats.enabled}/{ruleStats.total}
                 </span>
               </div>
               <div className="flex items-center justify-between">

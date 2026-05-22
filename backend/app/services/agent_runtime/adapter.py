@@ -8,7 +8,9 @@ from app.services.finding_runtime.models import RuntimeMessageRole, TranscriptIt
 from app.services.finding_runtime.query_transitions import hydrate_query_loop_state
 from app.services.finding_runtime.skills import RuntimeSkillCatalog
 from app.services.runtime_core.memory_runtime import RuntimeMemoryManager, build_memory_message
+from app.services.runtime_core.explicit_skill_loader import load_explicit_skill_injections
 from app.services.runtime_core.skill_discovery import SkillDiscoveryScheduler
+from app.services.runtime_core.skill_mentions import collect_explicit_skill_mentions
 
 
 class AgentRuntimeAdapter:
@@ -22,6 +24,7 @@ class AgentRuntimeAdapter:
         skill_catalog: RuntimeSkillCatalog | None = None,
         memory_manager: RuntimeMemoryManager | None = None,
         discovery_scheduler: SkillDiscoveryScheduler | None = None,
+        skill_service: Any = SkillService,
     ):
         self._session_store = session_store
         self._runner = runner
@@ -32,6 +35,7 @@ class AgentRuntimeAdapter:
             session_factory=getattr(session_store, "_session_factory", None)
         )
         self._discovery_scheduler = discovery_scheduler or SkillDiscoveryScheduler()
+        self._skill_service = skill_service
 
     async def run(
         self,
@@ -63,8 +67,9 @@ class AgentRuntimeAdapter:
                 await maybe_awaitable
 
         effective_user_message = user_message or self._default_user_message
-        skill_context, skill_bootstrap_text, discovery_snapshot = await self._resolve_skill_context(
+        skill_context, explicit_skill_injection_text, discovery_snapshot = await self._resolve_skill_context(
             session_id=session_id,
+            base_system_prompt=system_prompt,
             user_message=effective_user_message,
             recon_payload=session_recon_payload,
         )
@@ -89,7 +94,7 @@ class AgentRuntimeAdapter:
         enriched_system_prompt = self._compose_system_prompt(
             base_system_prompt=system_prompt,
             skill_context=skill_context,
-            skill_bootstrap_text=skill_bootstrap_text,
+            explicit_skill_injection_text=explicit_skill_injection_text,
             memories=memory_bundle.all_memories,
         )
         self._session_store.update_system_prompt(session_id, enriched_system_prompt)
@@ -136,8 +141,9 @@ class AgentRuntimeAdapter:
             runtime_state.metadata.get("last_user_message"),
         )
         recon_payload = dict(snapshot.session.recon_payload or {})
-        skill_context, skill_bootstrap_text, discovery_snapshot = await self._resolve_skill_context(
+        skill_context, explicit_skill_injection_text, discovery_snapshot = await self._resolve_skill_context(
             session_id=session_id,
+            base_system_prompt=base_system_prompt,
             user_message=effective_user_message,
             recon_payload=recon_payload,
         )
@@ -150,7 +156,7 @@ class AgentRuntimeAdapter:
         enriched_system_prompt = self._compose_system_prompt(
             base_system_prompt=base_system_prompt,
             skill_context=skill_context,
-            skill_bootstrap_text=skill_bootstrap_text,
+            explicit_skill_injection_text=explicit_skill_injection_text,
             memories=memories,
         )
         self._session_store.update_system_prompt(session_id, enriched_system_prompt)
@@ -181,7 +187,7 @@ class AgentRuntimeAdapter:
             "route_message": skill_context.route_message,
         }
 
-    async def _resolve_skill_context(self, *, session_id: str, user_message: str, recon_payload: dict):
+    async def _resolve_skill_context(self, *, session_id: str, base_system_prompt: str, user_message: str, recon_payload: dict):
         skill_context = await self._skill_catalog.preload(
             user_id=None,
             agent_type=self._agent_type,
@@ -203,24 +209,22 @@ class AgentRuntimeAdapter:
             recon_payload=recon_payload,
         )
         self._apply_discovery_snapshot(skill_context, discovery_snapshot)
-        primary_skill = str(skill_context.route_plan.get("primary_skill") or "").strip()
-        skill_bootstrap_text = ""
-        if primary_skill:
-            try:
-                skill_body = await SkillService.get_skill_body(None, primary_skill, agent_type=self._agent_type)
-            except Exception:
-                skill_body = None
-            if isinstance(skill_body, dict):
-                skill_text = str(
-                    skill_body.get("content")
-                    or skill_body.get("body")
-                    or skill_body.get("markdown")
-                    or ""
-                ).strip()
-                if not skill_text:
-                    skill_text = str(skill_body)
-                skill_bootstrap_text = f"Primary skill bootstrap: {primary_skill}\n\n{skill_text[:6000]}"
-        return skill_context, skill_bootstrap_text, discovery_snapshot
+        explicit_mentions = collect_explicit_skill_mentions(
+            mention_sources=[
+                ("user", user_message),
+                ("system", base_system_prompt),
+                ("route", skill_context.route_message),
+            ],
+            available_skills=skill_context.available_skills,
+        )
+        explicit_skill_injection_text = await load_explicit_skill_injections(
+            session_store=self._session_store,
+            agent_type=self._agent_type,
+            session_id=session_id,
+            mentions=explicit_mentions,
+            skill_service=self._skill_service,
+        )
+        return skill_context, explicit_skill_injection_text, discovery_snapshot
 
     def _apply_discovery_snapshot(self, skill_context, discovery_snapshot: dict[str, object]) -> None:
         route_plan = dict(skill_context.route_plan or {})
@@ -314,14 +318,14 @@ class AgentRuntimeAdapter:
         return resolved_fallback or self._default_user_message
 
     @staticmethod
-    def _compose_system_prompt(*, base_system_prompt: str, skill_context, skill_bootstrap_text: str, memories: list) -> str:
+    def _compose_system_prompt(*, base_system_prompt: str, skill_context, explicit_skill_injection_text: str, memories: list) -> str:
         prompt_sections = [str(base_system_prompt or "").strip()]
         if skill_context.prompt.strip():
             prompt_sections.append(skill_context.prompt.strip())
         if skill_context.route_message.strip():
             prompt_sections.append(skill_context.route_message.strip())
-        if skill_bootstrap_text.strip():
-            prompt_sections.append(skill_bootstrap_text.strip())
+        if explicit_skill_injection_text.strip():
+            prompt_sections.append(explicit_skill_injection_text.strip())
         for memory in memories or []:
             prompt_sections.append(build_memory_message(memory))
         return "\n\n".join(section for section in prompt_sections if section)

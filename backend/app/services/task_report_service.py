@@ -136,6 +136,7 @@ def serialize_finding(finding: AgentFinding | Dict[str, Any]) -> Dict[str, Any]:
     exploit_chain = filter_meaningful_exploit_chain(raw_finding.get("exploit_chain", []))
     return {
         "id": finding.id,
+        "task_id": finding.task_id,
         "title": finding.title,
         "severity": str(finding.severity),
         "vulnerability_type": str(finding.vulnerability_type),
@@ -169,6 +170,7 @@ def serialize_finding(finding: AgentFinding | Dict[str, Any]) -> Dict[str, Any]:
         "priority_path_refs": raw_finding.get("priority_path_refs", []),
         "business_flow_notes": raw_finding.get("business_flow_notes", []),
         "evidence_gaps": raw_finding.get("evidence_gaps", []),
+        "created_at": finding.created_at.isoformat() if finding.created_at else None,
     }
 
 

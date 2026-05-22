@@ -422,6 +422,7 @@ def _normalize_model_response(response) -> RuntimeModelResponse:
     payload = dict(response or {})
     return RuntimeModelResponse(
         content=str(payload.get("content") or ""),
+        reasoning_content=str(payload.get("reasoning_content") or ""),
         tool_calls=list(payload.get("tool_calls") or []),
         stop_reason=payload.get("stop_reason"),
         recoverable_error_kind=payload.get("recoverable_error_kind"),

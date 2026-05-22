@@ -1174,3 +1174,113 @@ async def test_finding_runtime_stack_preserves_verification_handoff_contract(fin
     assert bridge.recorded_handoffs[0]["session_id"] == "runtime-session-1"
     assert bridge.recorded_handoffs[0]["handoff_payload"]["to_agent"] == "verification"
 
+
+@pytest.mark.asyncio
+async def test_finding_runtime_stack_emits_assistant_responses_to_activity_log(
+    finding_agent,
+    mock_event_emitter,
+    monkeypatch,
+):
+    class FakeBridge:
+        def __init__(self):
+            self.run_calls = []
+
+        async def run(self, **kwargs):
+            self.run_calls.append(kwargs)
+            event_sink = kwargs.get("event_sink")
+            assert callable(event_sink)
+            await event_sink(
+                {
+                    "type": "done",
+                    "message": {
+                        "id": "assistant-1",
+                        "content": "",
+                        "payload": {"reasoning_content": "Need to inspect auth middleware before finalizing."},
+                    },
+                }
+            )
+            return {
+                "session_id": "runtime-session-1",
+                "final_payload": {"findings": [], "summary": "No findings."},
+                "turn_count": 1,
+                "tool_call_count": 0,
+                "runner_result": TurnExecutionResult(
+                    turn_id="turn-1",
+                    stop_reason=RuntimeStopReason.COMPLETED,
+                    completion_mode=RuntimeCompletionMode.FINALIZE_TOOL,
+                ),
+                "skill_route": {},
+                "memory_counts": {},
+            }
+
+        def record_handoff(self, session_id, handoff_payload, *, status="pending"):
+            return "handoff-1"
+
+    bridge = FakeBridge()
+    finding_agent._runtime_bridge_factory = lambda user_id: bridge
+    finding_agent._build_initial_message = lambda context: "audit this repo"
+    monkeypatch.setattr(
+        SkillService,
+        "resolve_agent_skills",
+        AsyncMock(return_value={}),
+    )
+
+    result = await finding_agent.run(
+        {
+            "project_id": "project-1",
+            "project_info": {"name": "demo", "root": "/tmp/demo"},
+            "task_id": "task-1",
+            "task": "Audit auth middleware",
+            "task_context": "Focus on auth.",
+            "recon_data": {"summary": "FastAPI service"},
+            "config": {
+                "user_id": "user-1",
+                "finding_runtime_stack": "runtime",
+                "workflow": {"finding_runtime_stack": "runtime"},
+            },
+        }
+    )
+
+    assert result.success is True
+    emitted_events = [call.args[0] for call in mock_event_emitter.emit.await_args_list]
+    assert any(
+        getattr(event, "event_type", "") == "thinking"
+        and "Need to inspect auth middleware" in (getattr(event, "message", "") or "")
+        for event in emitted_events
+    )
+
+
+@pytest.mark.asyncio
+async def test_finding_runtime_activity_sink_flushes_reasoning_before_stream_error(
+    finding_agent,
+    mock_event_emitter,
+):
+    sink = finding_agent._build_runtime_activity_event_sink()
+
+    await sink(
+        {
+            "type": "reasoning_delta",
+            "content": "Need to inspect auth middleware.",
+            "accumulated": "Need to inspect auth middleware.",
+        }
+    )
+    await sink(
+        {
+            "type": "error",
+            "error_type": "connection",
+            "error": "upstream 502 from relay: provider trace id abc123",
+            "user_message": "LLM streaming request failed. Please retry.",
+        }
+    )
+
+    emitted_events = [call.args[0] for call in mock_event_emitter.emit.await_args_list]
+    assert any(
+        getattr(event, "event_type", "") == "thinking"
+        and "Need to inspect auth middleware" in (getattr(event, "message", "") or "")
+        for event in emitted_events
+    )
+    error_events = [event for event in emitted_events if getattr(event, "event_type", "") == "error"]
+    assert error_events
+    assert "upstream 502 from relay" in (getattr(error_events[-1], "message", "") or "")
+    assert error_events[-1].metadata["raw_error"] == "upstream 502 from relay: provider trace id abc123"
+

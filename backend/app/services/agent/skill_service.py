@@ -122,7 +122,9 @@ class SkillService:
 
         lines = [
             "Skills runtime catalog:",
-            "Startup metadata is only a catalog. Read the actual SKILL.md before relying on a skill.",
+            "Skill 使用规则：如果某个 Skill 与用户任务语义匹配，或用户/系统提示显式提到了某个 Skill，必须先调用 Skill(action=\"body\") 阅读完整 SKILL.md，再输出任何与该任务相关的审计结论、计划或报告。",
+            "读完 SKILL.md 后，必须按其中的启动流程继续调用 Skill(action=\"read_resource\", resource_name=...) 读取必读 references、checklists、examples 或 scripts；不能把 startup metadata、available skills、route plan 或 discovery 结果当作已阅读 Skill 的替代。",
+            "Startup metadata is only a catalog. It helps choose a skill, but it does not load the skill body.",
             prompt,
         ]
         primary_skill = route_plan.get("primary_skill")

@@ -27,6 +27,7 @@ class FindingRuntimeRunner:
         event_sink=None,
         require_terminal_action: bool = False,
         terminal_action_nudge_limit: int = 1,
+        terminal_action_nudge_message: str | None = None,
     ):
         self._session_store = session_store
         self._max_turns = max_turns
@@ -38,6 +39,7 @@ class FindingRuntimeRunner:
             event_sink=event_sink,
             require_terminal_action=require_terminal_action,
             terminal_action_nudge_limit=terminal_action_nudge_limit,
+            terminal_action_nudge_message=terminal_action_nudge_message,
         )
 
     async def run_once(self, *, session_id: str, model_name: str) -> TurnExecutionResult:

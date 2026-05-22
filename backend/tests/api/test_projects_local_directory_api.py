@@ -40,6 +40,51 @@ def make_managed_root() -> Path:
 
 
 @pytest.mark.asyncio
+async def test_delete_project_endpoint_permanently_deletes_project():
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+    async with session_factory() as db:
+        db.add(
+            User(
+                id="user-1",
+                email="owner@example.com",
+                hashed_password="not-a-real-hash",
+                full_name="Owner",
+                is_active=True,
+            )
+        )
+        db.add(
+            Project(
+                id="project-delete-1",
+                name="Delete Me",
+                source_type="repository",
+                repository_url="https://example.com/repo.git",
+                owner_id="user-1",
+                is_active=True,
+            )
+        )
+        await db.commit()
+
+    async with session_factory() as db:
+        await projects_endpoint.delete_project(
+            id="project-delete-1",
+            db=db,
+            current_user=SimpleNamespace(id="user-1", is_active=True),
+        )
+
+    async with session_factory() as db:
+        deleted_project = await db.get(Project, "project-delete-1")
+
+    await engine.dispose()
+
+    assert deleted_project is None
+
+
+@pytest.mark.asyncio
 async def test_list_managed_local_directories_creates_missing_root():
     managed_root = WORKSPACE_ROOT / ".pytest-managed-projects" / str(uuid.uuid4()) / "projects"
     original_root = projects_endpoint.settings.MANAGED_PROJECTS_ROOT

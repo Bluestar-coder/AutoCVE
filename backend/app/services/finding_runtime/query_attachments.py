@@ -8,7 +8,9 @@ from app.services.finding_runtime.query_state import QueryLoopState
 
 
 def build_between_turn_attachments(*, state: QueryLoopState, records: list[Any], session_snapshot: Any) -> list[TranscriptItem]:
-    del state, session_snapshot
+    if _native_tool_history_enabled(state):
+        return []
+    del session_snapshot
     if not records:
         return []
     parts = [f"{record.request.name}({record.status})" for record in records]
@@ -23,7 +25,9 @@ def build_between_turn_attachments(*, state: QueryLoopState, records: list[Any],
 
 
 def start_pending_tool_use_summary(*, state: QueryLoopState, records: list[Any], session_snapshot: Any) -> dict[str, Any] | None:
-    del state, session_snapshot
+    if _native_tool_history_enabled(state):
+        return None
+    del session_snapshot
     if not records:
         return None
     lines: list[str] = []
@@ -66,3 +70,8 @@ def materialize_pending_tool_use_summary(state: QueryLoopState) -> QueryLoopStat
     ]
     state.pending_tool_use_summary = None
     return state
+
+
+def _native_tool_history_enabled(state: QueryLoopState) -> bool:
+    context = dict(state.tool_use_context or {})
+    return bool(context.get("native_tool_history", True))

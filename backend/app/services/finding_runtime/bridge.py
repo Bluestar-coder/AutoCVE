@@ -22,32 +22,28 @@ from app.services.finding_runtime.runner import FindingRuntimeRunner
 from app.services.finding_runtime.session_store import AuditSessionStore
 from app.services.finding_runtime.skills import RuntimeSkillCatalog
 from app.services.finding_runtime.tools.finalize_finding import FinalizeFindingTool
+from app.services.finding_runtime.tools.finalize_vulnerability_reports import FinalizeVulnerabilityReportsTool
 from app.services.finding_runtime.tooling import ToolOrchestrator, ToolRegistry
 from app.services.runtime_core import build_runtime_tool_registry
+from app.services.runtime_core.tool_message_codec import (
+    ToolMessageFormat,
+    build_runtime_model_messages,
+)
 
 READ_SAFE_RUNTIME_TOOLS = {"Read", "Glob", "Grep", "Skill"}
+REPORT_GENERATION_RUNTIME_TOOLS = {"Read", "Glob", "Grep"}
 INTERNAL_TOOL_NAMES = {"think", "reflect", "load_skill_body", "skill_resource_lookup"}
 AUTO_FINALIZER_PROMPTS_ENABLED = True
 RUNTIME_FINALIZATION_PROMPT = (
-    "立即停止继续审计，并仅以 JSON 返回最终报告。"
-    "除非最终答案绝对需要，否则不要再调用任何工具。"
-    "返回一个对象，顶层只包含 findings（数组）和 summary（字符串）。"
-    "如果当前证据不足以支持 CVE 级问题，请返回 findings=[]，并在 summary 中说明已审查的攻击面。"
-
-)
-RUNTIME_FINALIZATION_PROMPT = (
-    "你正在补交 Finding 阶段最终结果。你只能做一件事：\n\n"
-    "如果已有足够证据形成漏洞结论，请调用 FinalizeFinding，提交 findings 和 summary。\n"
-    "如果没有足够证据确认漏洞，请调用 FinalizeFinding，提交 findings=[]，并在 summary 中说明未确认到可报告漏洞。\n\n"
-    "不要继续普通文字分析，不要输出 Markdown，不要声称还需要查看文件。"
-)
-RUNTIME_FINALIZATION_PROMPT = (
-    "你正在补交 Finding 阶段最终结果。你只能做一件事：\n\n"
-    "如果已有足够证据形成漏洞结论，请调用 FinalizeFinding，提交 findings 和 summary。\n"
-    "只有在审计已经完成、且可以明确确认没有可报告漏洞时，才允许调用 FinalizeFinding 提交 findings=[]。\n"
-    "如果仍需继续查看文件、验证调用链、补齐 source/sink/PoC/影响面，请不要调用 FinalizeFinding，"
-    "应继续调用 Read/Grep/Glob/PowerShell 等工具收集证据。\n\n"
-    "不要继续普通文字分析，不要输出 Markdown，不要把未完成审计包装成空 findings。"
+    "你正在处理 Finding 阶段的最终提交恢复流程。\n\n"
+    "不要因为当前已经存在一个完整漏洞就直接结束。FinalizeFinding 是终点工具，调用成功后审计会立即停止。\n\n"
+    "如果审计尚未充分覆盖主要攻击面，或者仍存在需要继续验证的高价值候选，请不要调用 FinalizeFinding；"
+    "应继续调用 Read/Grep/Glob/PowerShell/Skill 等工具补齐证据。\n\n"
+    "只有在审计已经完成且以下条件满足时才调用 FinalizeFinding：\n"
+    "1. 已经完成主要攻击面覆盖；\n"
+    "2. 所有放入 findings 的漏洞都具备完整 source→sink 利用链、PoC、impact、cve_justification 和 verification_notes；\n"
+    "3. 如果 findings 数量较少，summary 明确说明已覆盖范围、被排除候选和没有更多可报告漏洞的原因。\n\n"
+    "不要输出 Markdown，不要自然语言宣布完成。继续审计就调用工具；确实完成才调用 FinalizeFinding。"
 )
 FINALIZER_ELIGIBLE_STOP_REASONS = {
     RuntimeStopReason.COMPLETED,
@@ -55,11 +51,14 @@ FINALIZER_ELIGIBLE_STOP_REASONS = {
     RuntimeStopReason.HOOK_STOPPED,
 }
 NATIVE_TOOL_CALLING_REMINDER = (
-    "当存在可用工具时，只能使用模型提供方原生的结构化工具调用接口。"
-    "不要输出纯文本工具语法，例如 'Tool Call:'、'Action:' 或“我接下来要调用某个工具”。"
-    "如果还需要继续收集证据，请直接调用下一次工具。"
-    "如果已经完成审计，请调用 FinalizeFinding 提交最终结构化结果。"
-    "不要只描述下一步计划而不执行。"
+    "工具调用协议：\n"
+    "当存在可用工具时，继续审计不能只用自然语言表达计划。凡是你说“继续、检查、查看、读取、搜索、追踪、"
+    "验证、确认、补齐证据、分析调用链”等意思，必须在同一条 assistant 响应中实际发起原生结构化工具调用。\n\n"
+    "如果还需要证据：直接调用 Read/Grep/Glob/Skill/PowerShell 等合适工具继续审计。如果还没有充分覆盖主要攻击面，也必须继续调用工具。\n"
+    "如果审计已经充分完成：调用 FinalizeFinding 提交结构化结果；或输出可解析的 {\"findings\": [...], \"summary\": \"...\"} JSON。\n"
+    "注意：发现第一个完整漏洞不等于审计完成。FinalizeFinding 调用成功后会终止 Finding 阶段，因此不要把它当作阶段性保存工具。\n"
+    "禁止只回复“我将继续/让我继续/下一步我会...”而不调用工具。这样的响应会被视为未完成。\n"
+    "不要输出伪工具语法，例如 Tool Call:、Action:、JSON 形式的伪调用；只能使用模型提供方原生 tool_call。"
 )
 
 
@@ -84,6 +83,7 @@ class RuntimeLLMModelClient:
             recon_payload=recon_payload,
             transcript=transcript,
             tool_definitions=tool_definitions,
+            tool_message_format=self._resolve_tool_message_format(),
         )
         response = await self._llm_service.chat_completion(
             messages=messages,
@@ -94,6 +94,7 @@ class RuntimeLLMModelClient:
         )
         return RuntimeModelResponse(
             content=response.get("content", "") or "",
+            reasoning_content=str(response.get("reasoning_content") or ""),
             tool_calls=[self._normalize_tool_call(item) for item in response.get("tool_calls") or []],
             stop_reason=response.get("finish_reason") or "stop",
             recoverable_error_kind=self._classify_recoverable_error_kind(response),
@@ -118,6 +119,7 @@ class RuntimeLLMModelClient:
             recon_payload=recon_payload,
             transcript=transcript,
             tool_definitions=tool_definitions,
+            tool_message_format=self._resolve_tool_message_format(),
         )
 
         final_event: dict[str, Any] | None = None
@@ -146,6 +148,7 @@ class RuntimeLLMModelClient:
         final_event = final_event or {}
         return RuntimeModelResponse(
             content=str(final_event.get("content") or ""),
+            reasoning_content=str(final_event.get("reasoning_content") or ""),
             tool_calls=[self._normalize_tool_call(item) for item in final_event.get("tool_calls") or []],
             stop_reason=str(final_event.get("finish_reason") or "stop"),
             recoverable_error_kind=self._classify_recoverable_error_kind(final_event),
@@ -169,6 +172,7 @@ class RuntimeLLMModelClient:
             recon_payload=recon_payload,
             transcript=transcript,
             tool_definitions=tool_definitions,
+            tool_message_format=self._resolve_tool_message_format(),
         )
         stream_fn = getattr(self._llm_service, "chat_completion_stream", None)
         if callable(stream_fn):
@@ -185,9 +189,6 @@ class RuntimeLLMModelClient:
                     continue
                 if normalized.get("type") == "content_delta":
                     accumulated = normalized.get("accumulated") or accumulated
-                if normalized.get("type") == "done":
-                    for tool_call in list(normalized.get("tool_calls") or []):
-                        yield {"type": "tool_call", "tool_call": tool_call}
                 yield normalized
                 if normalized.get("type") == "done":
                     return
@@ -220,8 +221,8 @@ class RuntimeLLMModelClient:
         recon_payload: dict[str, Any],
         transcript: list[Any],
         tool_definitions: list[dict[str, Any]] | None = None,
-    ) -> list[dict[str, str]]:
-        messages: list[dict[str, str]] = []
+        tool_message_format: ToolMessageFormat | str = ToolMessageFormat.OPENAI_TOOLS,
+    ) -> list[dict[str, Any]]:
         effective_system_prompt = (system_prompt or "").strip()
         if tool_definitions:
             effective_system_prompt = (
@@ -229,13 +230,31 @@ class RuntimeLLMModelClient:
                 if effective_system_prompt
                 else NATIVE_TOOL_CALLING_REMINDER
             )
-        if recon_payload:
-            recon_text = "Runtime recon payload:\n" + json.dumps(recon_payload, ensure_ascii=False, indent=2)
-            effective_system_prompt = f"{effective_system_prompt}\n\n{recon_text}".strip() if effective_system_prompt else recon_text
-        if effective_system_prompt:
-            messages.append({"role": "system", "content": effective_system_prompt})
-        messages.extend(mapped for item in transcript if (mapped := RuntimeLLMModelClient._map_transcript_item(item)) is not None)
-        return messages
+        return build_runtime_model_messages(
+            system_prompt=effective_system_prompt,
+            recon_payload=recon_payload,
+            transcript=transcript,
+            tool_definitions=tool_definitions,
+            tool_message_format=tool_message_format,
+        )
+
+    def _resolve_tool_message_format(self) -> ToolMessageFormat:
+        config = getattr(self._llm_service, "config", None)
+        raw = getattr(config, "tool_message_format", None)
+        if not raw or str(raw).strip().lower() == "auto":
+            endpoint_protocol = str(getattr(config, "endpoint_protocol", "") or "").strip().lower()
+            provider = str(getattr(getattr(config, "provider", None), "value", None) or getattr(config, "provider", "") or "").strip().lower()
+            if endpoint_protocol in {"anthropic", "anthropic_messages"}:
+                return ToolMessageFormat.ANTHROPIC_BLOCKS
+            if endpoint_protocol in {"openai", "openai_compatible", "openai-compatible", "chat_completions"}:
+                return ToolMessageFormat.OPENAI_TOOLS
+            if provider in {"claude", "anthropic"}:
+                return ToolMessageFormat.ANTHROPIC_BLOCKS
+            return ToolMessageFormat.OPENAI_TOOLS
+        try:
+            return ToolMessageFormat(str(raw))
+        except ValueError:
+            return ToolMessageFormat.OPENAI_TOOLS
 
     @staticmethod
     def _classify_recoverable_error_kind(response: dict[str, Any]) -> str | None:
@@ -266,6 +285,12 @@ class RuntimeLLMModelClient:
             if not content:
                 return None
             return {"type": "content_delta", "content": content, "accumulated": next_accumulated}
+        if event_type == "reasoning_delta":
+            content = str(payload.get("reasoning_content") or payload.get("content") or "")
+            next_accumulated = str(payload.get("accumulated") or content)
+            if not content:
+                return None
+            return {"type": "reasoning_delta", "content": content, "accumulated": next_accumulated}
         if event_type == "tool_call":
             raw_tool_call = payload.get("tool_call") or payload
             return {"type": "tool_call", "tool_call": RuntimeLLMModelClient._normalize_tool_call(raw_tool_call)}
@@ -283,6 +308,8 @@ class RuntimeLLMModelClient:
                 "recoverable_error_kind": RuntimeLLMModelClient._classify_recoverable_error_kind(response_payload),
                 "recoverable_error_message": str(payload.get("recoverable_error_message") or payload.get("error_message") or "").strip() or None,
                 "tool_calls": tool_calls,
+                "reasoning_content": str(payload.get("reasoning_content") or "").strip(),
+                "usage": dict(payload.get("usage") or {}),
             }
         if event_type == "error":
             return {
@@ -497,6 +524,7 @@ class FindingRuntimeBridge:
         user_message: str,
         model_name: str = "finding-runtime",
         max_turns: int | None = None,
+        event_sink: Callable[[dict[str, Any]], Any] | None = None,
     ) -> dict[str, Any]:
         model_client = RuntimeLLMModelClient(llm_service=self._llm_service, agent_type="finding")
         tool_registry = self._build_tool_registry()
@@ -507,6 +535,7 @@ class FindingRuntimeBridge:
             tool_registry=tool_registry,
             tool_orchestrator=tool_orchestrator,
             max_turns=max_turns,
+            event_sink=event_sink,
             require_terminal_action=True,
             terminal_action_nudge_limit=2,
         )
@@ -728,9 +757,12 @@ class FindingRuntimeBridge:
         model_name: str = "finding-runtime",
         max_turns: int | None = None,
         fallback_payload_builder: Callable[[Any], Any] | None = None,
+        tool_registry: ToolRegistry | None = None,
+        finalizer_tools: list[Any] | None = None,
+        terminal_action_nudge_message: str | None = None,
     ) -> dict[str, Any]:
         model_client = RuntimeLLMModelClient(llm_service=self._llm_service, agent_type="finding")
-        tool_registry = self._build_tool_registry()
+        tool_registry = tool_registry or self._build_tool_registry()
         tool_orchestrator = ToolOrchestrator(session_store=self._session_store, tool_registry=tool_registry)
         runner = FindingRuntimeRunner(
             session_store=self._session_store,
@@ -740,6 +772,7 @@ class FindingRuntimeBridge:
             max_turns=max_turns,
             require_terminal_action=True,
             terminal_action_nudge_limit=2,
+            terminal_action_nudge_message=terminal_action_nudge_message,
         )
         adapter = FindingRuntimeAdapter(
             session_store=self._session_store,
@@ -749,16 +782,21 @@ class FindingRuntimeBridge:
         )
         await adapter.refresh_session_context(session_id=session_id)
         runner_result = await runner.run_once(session_id=session_id, model_name=model_name)
-        snapshot, final_payload = await self._ensure_payload(
-            session_id=session_id,
-            model_name=model_name,
-            max_turns=max_turns,
-            model_client=model_client,
-            runner_result=runner_result,
-            payload_extractor=payload_extractor,
-            finalizer_prompts=finalizer_prompts,
-            fallback_payload_builder=fallback_payload_builder,
-        )
+        ensure_kwargs = {
+            "session_id": session_id,
+            "model_name": model_name,
+            "max_turns": max_turns,
+            "model_client": model_client,
+            "runner_result": runner_result,
+            "payload_extractor": payload_extractor,
+            "finalizer_prompts": finalizer_prompts,
+            "fallback_payload_builder": fallback_payload_builder,
+        }
+        if finalizer_tools is not None:
+            ensure_kwargs["finalizer_tools"] = finalizer_tools
+        if terminal_action_nudge_message is not None:
+            ensure_kwargs["terminal_action_nudge_message"] = terminal_action_nudge_message
+        snapshot, final_payload = await self._ensure_payload(**ensure_kwargs)
         return {
             "session_id": session_id,
             "runner_result": runner_result,
@@ -786,6 +824,8 @@ class FindingRuntimeBridge:
         payload_extractor: Callable[[Any], Any | None],
         finalizer_prompts: list[str],
         fallback_payload_builder: Callable[[Any], Any] | None = None,
+        finalizer_tools: list[Any] | None = None,
+        terminal_action_nudge_message: str | None = None,
     ) -> tuple[Any, Any]:
         snapshot = self._session_store.load_session_snapshot(session_id)
         runner_payload = getattr(runner_result, "final_payload", None)
@@ -805,7 +845,7 @@ class FindingRuntimeBridge:
                 return snapshot, fallback_payload_builder(snapshot)
             raise ValueError('Runtime session ended without a machine-parseable payload for the requested continuation.')
 
-        finalizer_registry = ToolRegistry([FinalizeFindingTool()])
+        finalizer_registry = ToolRegistry(finalizer_tools or [FinalizeFindingTool()])
         finalizer_orchestrator = ToolOrchestrator(session_store=self._session_store, tool_registry=finalizer_registry)
         for index, prompt in enumerate(finalizer_prompts, start=1):
             self._session_store.append_message(
@@ -825,6 +865,7 @@ class FindingRuntimeBridge:
                 max_turns=2 if max_turns is None else max(1, min(2, max_turns)),
                 require_terminal_action=True,
                 terminal_action_nudge_limit=1,
+                terminal_action_nudge_message=terminal_action_nudge_message,
             )
             await runner.run_once(session_id=session_id, model_name=model_name)
             snapshot = self._session_store.load_session_snapshot(session_id)
@@ -844,11 +885,79 @@ class FindingRuntimeBridge:
             user_id=self._user_id,
         )
 
+    def _build_report_generation_tool_registry(self) -> ToolRegistry:
+        full_registry = build_runtime_tool_registry(
+            session_store=self._session_store,
+            agent_tools=self._tools,
+            agent_type="finding",
+            user_id=self._user_id,
+            include_finding_finalizer=False,
+            include_report_finalizer=True,
+        )
+        allowed_names = {*REPORT_GENERATION_RUNTIME_TOOLS, FinalizeVulnerabilityReportsTool.name}
+        return ToolRegistry([tool for tool in full_registry.all_tools() if tool.name in allowed_names])
+
+    def prepare_report_generation_continuation(
+        self,
+        *,
+        session_id: str,
+        system_prompt: str,
+        context_message: str,
+        metadata: dict[str, Any] | None = None,
+    ) -> str:
+        prompt = str(system_prompt or "").strip()
+        if not prompt:
+            raise ValueError("Report generation system prompt must not be empty.")
+        runtime_state = self._session_store.load_runtime_state(session_id)
+        runtime_state.metadata["base_system_prompt"] = prompt
+        runtime_state.metadata["last_user_message"] = str(context_message or "")
+        runtime_state.metadata["report_generation_mode"] = True
+        self._session_store.update_system_prompt(session_id, prompt)
+        self._session_store.replace_runtime_state(session_id, runtime_state)
+        return self._session_store.append_message(
+            session_id,
+            TranscriptItem(
+                role=RuntimeMessageRole.USER,
+                name="managed_report_generator",
+                content=str(context_message or ""),
+                metadata={
+                    "kind": "internal_managed_report_request",
+                    **dict(metadata or {}),
+                },
+            ),
+        )
+
+    async def continue_session_until_report_payload(
+        self,
+        *,
+        session_id: str,
+        payload_extractor: Callable[[Any], Any | None],
+        finalizer_prompts: list[str],
+        terminal_action_nudge_message: str | None = None,
+        model_name: str = "finding-runtime",
+        max_turns: int | None = None,
+        fallback_payload_builder: Callable[[Any], Any] | None = None,
+    ) -> dict[str, Any]:
+        return await self.continue_session_until_payload(
+            session_id=session_id,
+            payload_extractor=payload_extractor,
+            finalizer_prompts=finalizer_prompts,
+            model_name=model_name,
+            max_turns=max_turns,
+            fallback_payload_builder=fallback_payload_builder,
+            tool_registry=self._build_report_generation_tool_registry(),
+            finalizer_tools=[FinalizeVulnerabilityReportsTool()],
+            terminal_action_nudge_message=terminal_action_nudge_message,
+        )
+
     @staticmethod
     def _default_finalizer_prompts() -> list[str]:
         if not AUTO_FINALIZER_PROMPTS_ENABLED:
             return []
-        return [RUNTIME_FINALIZATION_PROMPT]
+        return [
+            RUNTIME_FINALIZATION_PROMPT
+            + "\n如果仍需继续查看文件、验证调用链、补齐 source/sink/PoC/影响面，请继续调用工具，不要结束。"
+        ]
         return [
             RUNTIME_FINALIZATION_PROMPT,
             (
@@ -862,7 +971,7 @@ class FindingRuntimeBridge:
     @classmethod
     def _default_fallback_payload(cls, snapshot: Any) -> dict[str, Any]:
         recovered_findings = cls._recover_findings_from_assistant_transcript(snapshot)
-        return {
+        payload = {
             'findings': [],
             'recovered_candidates': recovered_findings,
             'summary': cls._fallback_summary(snapshot, recovered_findings),
@@ -870,6 +979,29 @@ class FindingRuntimeBridge:
             'is_final': False,
             'requires_retry': True,
         }
+        runtime_error = cls._latest_runtime_error(snapshot)
+        if runtime_error:
+            payload['runtime_error'] = runtime_error
+        return payload
+
+    @staticmethod
+    def _latest_runtime_error(snapshot: Any) -> dict[str, Any] | None:
+        for checkpoint in reversed(getattr(snapshot, 'checkpoints', []) or []):
+            state_payload = getattr(checkpoint, 'state_payload', None)
+            if not isinstance(state_payload, dict):
+                continue
+            stop_reason = str(state_payload.get('stop_reason') or '').strip()
+            error_message = str(state_payload.get('error') or '').strip()
+            if stop_reason != RuntimeStopReason.MODEL_ERROR.value and not error_message:
+                continue
+            return {
+                'stop_reason': stop_reason or None,
+                'message': error_message or None,
+                'error_class': state_payload.get('error_class'),
+                'phase': state_payload.get('phase'),
+                'checkpoint_id': getattr(checkpoint, 'id', None),
+            }
+        return None
 
     @staticmethod
     def _should_attempt_finalizer(runner_result: TurnExecutionResult | dict[str, Any] | None) -> bool:

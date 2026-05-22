@@ -549,7 +549,7 @@ async def delete_project(
     current_user: User = Depends(deps.get_current_user),
 ) -> Any:
     """
-    Soft delete project.
+    Permanently delete project.
     """
     result = await db.execute(select(Project).where(Project.id == id))
     project = result.scalars().first()
@@ -560,10 +560,9 @@ async def delete_project(
     if project.owner_id != current_user.id:
         raise HTTPException(status_code=403, detail="无权删除此项目")
     
-    project.is_active = False
-    project.updated_at = datetime.now(timezone.utc)
+    await db.delete(project)
     await db.commit()
-    return {"message": "项目已删除"}
+    return {"message": "项目已永久删除"}
 
 @router.post("/{id}/restore")
 async def restore_project(

@@ -10,6 +10,7 @@ from .types import LLMConfig, LLMProvider, DEFAULT_MODELS
 from .base_adapter import BaseLLMAdapter
 from .adapters import (
     LiteLLMAdapter,
+    AnthropicAdapter,
     BaiduAdapter,
     MinimaxAdapter,
     DoubaoAdapter,
@@ -53,6 +54,9 @@ class LLMFactory:
         if not config.model:
             config.model = DEFAULT_MODELS.get(config.provider, "gpt-4o-mini")
 
+        if cls._uses_anthropic_native_protocol(config):
+            return AnthropicAdapter(config)
+
         # 对于必须使用原生适配器的提供商
         if config.provider in NATIVE_ONLY_PROVIDERS:
             return cls._create_native_adapter(config)
@@ -63,6 +67,14 @@ class LLMFactory:
 
         # 不支持的提供商
         raise ValueError(f"不支持的LLM提供商: {config.provider}")
+
+    @staticmethod
+    def _uses_anthropic_native_protocol(config: LLMConfig) -> bool:
+        endpoint_protocol = str(config.endpoint_protocol or "").strip().lower()
+        return config.provider == LLMProvider.CLAUDE and endpoint_protocol in {
+            "anthropic",
+            "anthropic_messages",
+        }
 
     @classmethod
     def _create_native_adapter(cls, config: LLMConfig) -> BaseLLMAdapter:
@@ -83,7 +95,10 @@ class LLMFactory:
     def _get_cache_key(cls, config: LLMConfig) -> str:
         """生成缓存键"""
         api_key_prefix = config.api_key[:8] if config.api_key else "no-key"
-        return f"{config.provider.value}:{config.model}:{api_key_prefix}"
+        return (
+            f"{config.provider.value}:{config.model}:{config.base_url or ''}:"
+            f"{config.endpoint_protocol}:{config.tool_message_format}:{api_key_prefix}"
+        )
 
     @classmethod
     def clear_cache(cls) -> None:

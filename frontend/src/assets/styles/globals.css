@@ -865,3 +865,161 @@
     font-family: var(--font-mono-real) !important;
   }
 }
+
+@layer components {
+  .github-markdown {
+    color: #24292f;
+    font-family: var(--font-sans);
+    font-size: 15px;
+    line-height: 1.7;
+    overflow-wrap: break-word;
+  }
+
+  .github-markdown > :first-child {
+    margin-top: 0 !important;
+  }
+
+  .github-markdown > :last-child {
+    margin-bottom: 0 !important;
+  }
+
+  .github-markdown :where(h1, h2, h3, h4, h5, h6) {
+    margin: 24px 0 16px;
+    color: #24292f;
+    font-weight: 600;
+    line-height: 1.25;
+    letter-spacing: 0;
+  }
+
+  .github-markdown h1 {
+    padding-bottom: 0.35em;
+    border-bottom: 1px solid #d8dee4;
+    font-size: 2em;
+  }
+
+  .github-markdown h2 {
+    padding-bottom: 0.35em;
+    border-bottom: 1px solid #d8dee4;
+    font-size: 1.5em;
+  }
+
+  .github-markdown h3 {
+    font-size: 1.25em;
+  }
+
+  .github-markdown h4 {
+    font-size: 1em;
+  }
+
+  .github-markdown :where(p, blockquote, ul, ol, dl, table, pre) {
+    margin: 0 0 16px;
+  }
+
+  .github-markdown p {
+    color: #24292f;
+  }
+
+  .github-markdown a {
+    color: #0969da;
+    text-decoration: none;
+  }
+
+  .github-markdown a:hover {
+    color: #0969da;
+    text-decoration: underline;
+  }
+
+  .github-markdown :where(ul, ol) {
+    padding-left: 2em;
+  }
+
+  .github-markdown ul {
+    list-style: disc;
+  }
+
+  .github-markdown ol {
+    list-style: decimal;
+  }
+
+  .github-markdown li + li {
+    margin-top: 0.25em;
+  }
+
+  .github-markdown li > :where(p, ul, ol, pre) {
+    margin-top: 8px;
+  }
+
+  .github-markdown blockquote {
+    padding: 0 1em;
+    color: #57606a;
+    border-left: 0.25em solid #d0d7de;
+  }
+
+  .github-markdown code {
+    padding: 0.2em 0.4em;
+    border-radius: 6px;
+    background: rgba(175, 184, 193, 0.2);
+    color: #24292f;
+    font-family: var(--font-mono-real) !important;
+    font-size: 85%;
+  }
+
+  .github-markdown pre {
+    padding: 16px;
+    overflow-x: auto;
+    border: 1px solid #d8dee4;
+    border-radius: 8px;
+    background: #f6f8fa;
+    line-height: 1.45;
+  }
+
+  .github-markdown pre code {
+    display: block;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    color: #24292f;
+    font-size: 13px;
+    line-height: 1.55;
+    white-space: pre;
+  }
+
+  .github-markdown table {
+    display: block;
+    width: max-content;
+    max-width: 100%;
+    overflow: auto;
+    border-spacing: 0;
+    border-collapse: collapse;
+  }
+
+  .github-markdown :where(th, td) {
+    padding: 6px 13px;
+    border: 1px solid #d0d7de;
+  }
+
+  .github-markdown tr {
+    border-top: 1px solid #d8dee4;
+  }
+
+  .github-markdown tr:nth-child(2n) {
+    background: #f6f8fa;
+  }
+
+  .github-markdown th {
+    background: #f6f8fa;
+    font-weight: 600;
+  }
+
+  .github-markdown hr {
+    height: 0.25em;
+    margin: 24px 0;
+    border: 0;
+    background: #d8dee4;
+  }
+
+  .github-markdown img {
+    max-width: 100%;
+    border-radius: 8px;
+  }
+}

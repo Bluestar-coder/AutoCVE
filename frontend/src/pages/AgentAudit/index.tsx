@@ -152,7 +152,8 @@ function buildRuntimeSessionLogs(
     const metadata = (message.metadata || {}) as Record<string, unknown>;
     const payload = (message.payload || {}) as Record<string, unknown>;
     const toolName = String(message.name || payload.tool_name || 'unknown');
-    const content = message.content || '';
+    const reasoningContent = typeof payload.reasoning_content === 'string' ? payload.reasoning_content : '';
+    const content = message.role === 'assistant' ? (message.content || reasoningContent || '') : (message.content || '');
     const agentName = resolveRuntimeAgentName(message, session);
 
     if (message.role === 'user' && metadata.kind === 'finalization_prompt') {
@@ -207,7 +208,10 @@ function buildRuntimeSessionLogs(
 
     if (message.role === 'assistant') {
       const trimmed = content.trim();
-      const isThoughtLike = trimmed.startsWith('Thought:') || trimmed.includes('\nThought:') || trimmed.includes('Tool Call:');
+      if (!trimmed) {
+        return;
+      }
+      const isThoughtLike = Boolean(reasoningContent.trim()) || trimmed.startsWith('Thought:') || trimmed.includes('\nThought:') || trimmed.includes('Tool Call:');
       const isFinalAnswer = /^Final Answer:/i.test(trimmed) || /"findings"\s*:/.test(trimmed);
       pushLog(`runtime-msg-${message.id}`, message.created_at, {
         type: isThoughtLike ? 'thinking' : 'info',
@@ -1432,7 +1436,7 @@ function AgentAuditPageContent() {
       />
 
       {/* Main content */}
-      <div className="relative z-10 flex flex-1 overflow-hidden px-4 pb-4">
+      <div className="relative z-10 flex min-h-0 flex-1 overflow-hidden px-4 pb-4">
         {/* Left Panel - Activity Log */}
         <div className="relative flex w-[68%] flex-col overflow-hidden rounded-[28px] border border-border/70 bg-white/82 shadow-[0_20px_48px_rgba(88,97,110,0.12)] backdrop-blur-xl">
           {/* Detail header */}
@@ -1621,9 +1625,9 @@ function AgentAuditPageContent() {
         </div>
 
         {/* Right Panel - Agent Tree + Stats */}
-        <div className="relative ml-4 flex w-[32%] flex-col overflow-hidden rounded-[28px] border border-border/70 bg-white/78 shadow-[0_20px_48px_rgba(88,97,110,0.10)] backdrop-blur-xl">
+        <div className="relative ml-4 flex min-h-0 w-[32%] flex-col overflow-hidden rounded-[28px] border border-border/70 bg-white/78 shadow-[0_20px_48px_rgba(88,97,110,0.10)] backdrop-blur-xl">
           {/* Agent Tree section */}
-          <div className="flex-1 flex flex-col border-b border-border overflow-hidden">
+          <div className="flex min-h-0 basis-[34%] flex-col border-b border-border overflow-hidden">
             {/* Tree header */}
             <div className="flex-shrink-0 h-12 border-b border-border flex items-center justify-between px-4 bg-card">
               <div className="flex items-center gap-2.5 text-xs text-muted-foreground">
@@ -1694,7 +1698,7 @@ function AgentAuditPageContent() {
           </div>
 
           {/* Bottom section - Stats */}
-          <div className="flex-shrink-0 p-4 bg-card">
+          <div className="min-h-0 flex-1 overflow-y-auto p-4 custom-scrollbar bg-card">
             <StatsPanel task={task} findings={findings} />
           </div>
         </div>

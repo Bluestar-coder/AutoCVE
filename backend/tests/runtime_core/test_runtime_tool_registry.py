@@ -61,3 +61,35 @@ def test_runtime_tool_registry_builder_exposes_shared_runtime_tools_for_agent():
     assert "ExitPlanMode" in tool_names
     assert skill_tool is not None
     assert getattr(skill_tool, "_agent_type") == "recon"
+
+
+def test_runtime_tool_descriptions_explain_audit_usage_and_continue_contract():
+    store = build_store()
+    registry = build_runtime_tool_registry(
+        session_store=store,
+        agent_tools={
+            "read_file": FakeAgentTool("read_file"),
+            "read_many_files": FakeAgentTool("read_many_files"),
+            "list_files": FakeAgentTool("list_files"),
+            "search_code": FakeAgentTool("search_code"),
+        },
+        agent_type="finding",
+        user_id="user-1",
+    )
+
+    descriptions = {item["name"]: item["description"] for item in registry.describe_tools()}
+
+    assert "读取项目本地文件内容" in descriptions["Read"]
+    assert "file_path 为相对项目根目录的文件路径" in descriptions["Read"]
+    assert "Read 只能读取文件，不能枚举目录" in descriptions["Read"]
+    assert "必须实际调用 Read、Grep、Glob" in descriptions["Read"]
+
+    assert "在项目代码和配置文本中搜索关键字或正则表达式" in descriptions["Grep"]
+    assert "pattern 是要搜索的关键字或正则表达式" in descriptions["Grep"]
+    assert "搜索任务优先使用 Grep" in descriptions["Grep"]
+    assert "不要只回复“我将继续搜索" in descriptions["Grep"]
+
+    assert "按文件名或路径模式枚举项目文件" in descriptions["Glob"]
+    assert "pattern 是 glob 模式" in descriptions["Glob"]
+    assert "需要按内容查找时使用 Grep" in descriptions["Glob"]
+    assert "不要只说明“接下来查找相关文件”" in descriptions["Glob"]

@@ -29,12 +29,12 @@ export default function AuditSessionPage() {
 
   useAuditSessionStream(() => refresh({ silent: true }), Boolean(sessionId && session?.state === "running" && !isStreaming));
 
-  async function handleSubmit(content: string, mode: AuditSessionMessageMode) {
+  async function handleSubmit(content: string, mode: AuditSessionMessageMode, selectedSkillRefs: string[] = []) {
     if (!sessionId) {
       return;
     }
     try {
-      const result = await sendMessage(content, mode);
+      const result = await sendMessage(content, mode, selectedSkillRefs);
       if (mode === "generate_report_and_sync") {
         const managed = result.synced_managed_vulnerability;
         if (managed) {

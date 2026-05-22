@@ -19,19 +19,42 @@ import app.api.v1.endpoints.agent_tasks as agent_tasks_endpoint
 from app.api.v1.endpoints.agent_tasks import router as agent_tasks_router
 from app.db.base import Base
 from app.models.agent_task import AgentEvent, AgentEventType, AgentFinding, AgentTask, AgentTaskStatus
-from app.models.audit_session import AuditSession, AuditSessionMessage
+from app.models.audit_session import AuditSession, AuditSessionMessage, AuditSessionTurn, AuditToolCall
 from app.models.managed_vulnerability import ManagedVulnerability
 from app.models.project import Project
 from app.models.user import User
-from app.services.vulnerability_report_generation import GeneratedReportBundle
+from app.services.finding_runtime.config import FindingRuntimeStack
+from app.services.vulnerability_report_generation import GeneratedReportBundle, VulnerabilityReportGenerationService
 import app.services.agent.tools as agent_tools_module
 import app.services.rag as rag_module
+
+
+class CapturingEventEmitter:
+    def __init__(self):
+        self.events = []
+
+    async def emit_info(self, message: str, metadata=None):
+        self.events.append(("info", message, metadata or {}))
+
+    async def emit_tool_call(self, tool_name: str, tool_input, message=None):
+        self.events.append(("tool_call", tool_name, tool_input, message))
+
+    async def emit_tool_result(self, tool_name: str, tool_output, duration_ms: int, message=None):
+        self.events.append(("tool_result", tool_name, tool_output, duration_ms, message))
 
 
 def build_test_app() -> FastAPI:
     app = FastAPI()
     app.include_router(agent_tasks_router, prefix='/api/v1/agent-tasks')
     return app
+
+
+def _valid_generated_report_bundle() -> GeneratedReportBundle:
+    return GeneratedReportBundle(
+        report_en='# EN\n\n## Summary\nS\n\n## Vulnerability Description\napp/api.py reaches httpx.get.\n\nCore vulnerable code path:\n\n```python\ntarget = request.json["target"]\nresponse = httpx.get(target, timeout=5)\n```\n\n## Exploitation\nPOST /api/fetch.\n\n## Impact\nInternal service exposure.\n\n## Remediation\nValidate outbound targets.\n\n## Disclosure Notes\nTo be confirmed.\n\n## Supplemental Information\n### Affected products\n- Ecosystem: self-hosted\n- Package name: demo-app\n- Affected versions: to be confirmed\n- Patched versions: none confirmed\n\n### Severity\n- Scoring method: CVSS v3.1\n- Score: 8.6\n- Vector string: CVSS:3.1/AV:N/AC:L/PR:L/UI:N/S:U/C:H/I:L/A:N\n\n### Weaknesses\n- CWE: CWE-918 Server-Side Request Forgery (SSRF)',
+        report_zh='# ZH\n\n## Summary\nS\n\n## Vulnerability Description\napp/api.py reaches httpx.get.\n\nCore vulnerable code path:\n\n```python\ntarget = request.json["target"]\nresponse = httpx.get(target, timeout=5)\n```\n\n## Exploitation\nPOST /api/fetch.\n\n## Impact\nInternal service exposure.\n\n## Remediation\nValidate outbound targets.\n\n## Disclosure Notes\nTo be confirmed.\n\n## Supplemental Information\n### Affected products\n- Ecosystem: self-hosted\n- Package name: demo-app\n- Affected versions: to be confirmed\n- Patched versions: none confirmed\n\n### Severity\n- Scoring method: CVSS v3.1\n- Score: 8.6\n- Vector string: CVSS:3.1/AV:N/AC:L/PR:L/UI:N/S:U/C:H/I:L/A:N\n\n### Weaknesses\n- CWE: CWE-918 Server-Side Request Forgery (SSRF)',
+        report_cve='# demo_cve.md\n\n## CVE Submission Helper\n\n## Vulnerability type\n- [x] Other or Unknown\n\n## CWE\nCWE-918 Server-Side Request Forgery (SSRF)\n\n## Vendor of the product(s)\nDemo Vendor\n\n## Affected product(s)/code base\n### Product\ndemo-app\n\n### Version\nto be confirmed\n\n## Attack type\n- [x] Remote\n\n## Impact\n- [x] Information Disclosure\n\n## Affected component(s)\n/api/fetch endpoint\n\n## Core vulnerable code path\napp/api.py reaches httpx.get.\n\nCore vulnerable code path:\n\n```python\ntarget = request.json["target"]\nresponse = httpx.get(target, timeout=5)\n```\n\n## Attack vector(s)\nPOST /api/fetch\n\n## Suggested description of the vulnerability for use in the CVE\nSSRF in fetch endpoint.\n\n## Discoverer(s)/Credits\ncil\n\n## Reference(s)\n\n## Additional information\nNone.',
+    )
 
 
 @pytest.mark.asyncio
@@ -228,6 +251,80 @@ async def test_agent_task_routes_include_runtime_session_id():
 
     assert detail_response.status_code == 200
     assert detail_response.json()['runtime_session_id'] == 'session-1'
+
+
+@pytest.mark.asyncio
+async def test_agent_task_detail_uses_persisted_runtime_turn_and_tool_stats():
+    engine = create_async_engine('sqlite+aiosqlite:///:memory:')
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+    async with session_factory() as db:
+        user = User(
+            id='user-1',
+            email='owner@example.com',
+            hashed_password='not-a-real-hash',
+            full_name='Owner',
+            is_active=True,
+        )
+        project = Project(
+            id='project-1',
+            name='Demo Project',
+            owner_id='user-1',
+            source_type='repository',
+        )
+        task = AgentTask(
+            id='task-1',
+            project_id='project-1',
+            created_by='user-1',
+            name='Audit demo',
+            version_label='runtime-test',
+            status=AgentTaskStatus.FAILED,
+            current_phase='analysis',
+            total_iterations=0,
+            tool_calls_count=0,
+            created_at=datetime.now(timezone.utc),
+        )
+        session = AuditSession(
+            id='session-1',
+            project_id='project-1',
+            task_id='task-1',
+            runtime_stack='runtime',
+            state='failed',
+        )
+        turn_1 = AuditSessionTurn(id='turn-1', session_id='session-1', sequence=1, model_name='finding', status='tool_results_ready')
+        turn_2 = AuditSessionTurn(id='turn-2', session_id='session-1', sequence=2, model_name='finding', status='model_error')
+        tool_calls = [
+            AuditToolCall(id='tool-1', session_id='session-1', turn_id='turn-1', sequence=1, tool_use_id='call-1', tool_name='Read', status='completed'),
+            AuditToolCall(id='tool-2', session_id='session-1', turn_id='turn-1', sequence=2, tool_use_id='call-2', tool_name='Grep', status='completed'),
+            AuditToolCall(id='tool-3', session_id='session-1', turn_id='turn-2', sequence=3, tool_use_id='call-3', tool_name='Read', status='completed'),
+        ]
+        db.add_all([user, project, task, session, turn_1, turn_2, *tool_calls])
+        await db.commit()
+
+    app = build_test_app()
+
+    async def override_get_db():
+        async with session_factory() as db:
+            yield db
+
+    async def override_get_current_user():
+        return SimpleNamespace(id='user-1', is_active=True)
+
+    app.dependency_overrides[deps.get_db] = override_get_db
+    app.dependency_overrides[deps.get_current_user] = override_get_current_user
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url='http://testserver') as client:
+        response = await client.get('/api/v1/agent-tasks/task-1')
+
+    await engine.dispose()
+
+    assert response.status_code == 200
+    assert response.json()['total_iterations'] == 2
+    assert response.json()['tool_calls_count'] == 3
 
 
 @pytest.mark.asyncio
@@ -760,7 +857,9 @@ async def test_auto_generate_managed_reports_when_verification_disabled(monkeypa
             captured['session_id'] = session.id
             captured['managed_vulnerability_id'] = managed_vulnerability.id
             prompt = report_service.build_generation_prompt(vulnerability=managed_vulnerability)
-            assert 'Use the cve-report-writer skill' in prompt
+            assert 'cve-report-writer' not in prompt
+            assert 'Read/Grep/Glob/Skill' not in prompt
+            assert 'FinalizeVulnerabilityReports' in prompt
             return GeneratedReportBundle(
                 report_en='# EN\n\n## Summary\n\n## Vulnerability Description\n\n## Exploitation\n\n## Impact\n\n## Remediation\n\n## Disclosure Notes\n\n## Supplemental Information\n\n### Affected products\n- Ecosystem: self-hosted\n- Package name: demo-app\n- Affected versions: to be confirmed\n- Patched versions: none confirmed\n\n### Severity\n- Scoring method: CVSS v3.1\n- Score: 8.6\n- Vector string: CVSS:3.1/AV:N/AC:L/PR:L/UI:N/S:U/C:H/I:L/A:N\n\n### Weaknesses\n- CWE: CWE-918 Server-Side Request Forgery (SSRF)',
                 report_zh='# ZH\n\n## Summary\n\n## Vulnerability Description\n\n## Exploitation\n\n## Impact\n\n## Remediation\n\n## Disclosure Notes\n\n## 补充信息\n\n### Affected products\n- Ecosystem: self-hosted\n- Package name: demo-app\n- Affected versions: to be confirmed\n- Patched versions: none confirmed\n\n### Severity\n- Scoring method: CVSS v3.1\n- Score: 8.6\n- Vector string: CVSS:3.1/AV:N/AC:L/PR:L/UI:N/S:U/C:H/I:L/A:N\n\n### Weaknesses\n- CWE: CWE-918 Server-Side Request Forgery (SSRF)',
@@ -773,12 +872,14 @@ async def test_auto_generate_managed_reports_when_verification_disabled(monkeypa
         monkeypatch.setattr(agent_tasks_endpoint, '_get_user_config', fake_get_user_config)
         monkeypatch.setattr(agent_tasks_endpoint, '_generate_managed_report_bundle_from_session', fake_generate_managed_report_bundle_from_session)
         monkeypatch.setattr('app.services.llm.service.LLMService.chat_completion', fail_chat_completion)
+        event_emitter = CapturingEventEmitter()
 
         stats = await agent_tasks_endpoint._auto_generate_managed_vulnerability_reports(
             db=db,
             task=task,
             workflow_config={'agentStates': {'verification': {'enabled': False}}},
             findings=[finding],
+            event_emitter=event_emitter,
         )
         await db.commit()
 
@@ -801,14 +902,20 @@ async def test_auto_generate_managed_reports_when_verification_disabled(monkeypa
     assert managed.report_generation_status == 'completed'
     assert {report.report_kind for report in managed.reports} == {'en', 'zh', 'cve'}
     assert captured == {'session_id': 'session-1', 'managed_vulnerability_id': managed.id}
-    assert len(messages) == 1
+    assert len(messages) == 2
     assert messages[0].role == 'user'
     assert messages[0].message_metadata['kind'] == 'internal_managed_report_request'
-    assert 'Use the cve-report-writer skill' in messages[0].content
+    assert 'FinalizeVulnerabilityReports' in messages[0].content
+    assert 'cve-report-writer' not in messages[0].content
+    assert messages[1].message_metadata['kind'] == 'internal_managed_report_complete'
+    info_messages = [event[1] for event in event_emitter.events if event[0] == 'info']
+    assert any('Managed report generation prompt' in message for message in info_messages)
+    assert any('Managed report model response' in message for message in info_messages)
+    assert all('cve-report-writer' not in message for message in info_messages)
 
 
 @pytest.mark.asyncio
-async def test_auto_generate_managed_reports_skips_when_verification_enabled(monkeypatch):
+async def test_auto_generate_managed_reports_runs_when_verification_enabled(monkeypatch):
     engine = create_async_engine('sqlite+aiosqlite:///:memory:')
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
 
@@ -852,10 +959,15 @@ async def test_auto_generate_managed_reports_skips_when_verification_enabled(mon
         db.add_all([user, project, task, finding])
         await db.commit()
 
-        async def fail_chat_completion(self, *args, **kwargs):
-            raise AssertionError('chat_completion should not be called when verification is enabled')
+        async def fake_chat_completion(self, *args, **kwargs):
+            del self, args, kwargs
+            return {"content": json.dumps({
+                "report_en": _valid_generated_report_bundle().report_en,
+                "report_zh": _valid_generated_report_bundle().report_zh,
+                "report_cve": _valid_generated_report_bundle().report_cve,
+            })}
 
-        monkeypatch.setattr('app.services.llm.service.LLMService.chat_completion', fail_chat_completion)
+        monkeypatch.setattr('app.services.llm.service.LLMService.chat_completion', fake_chat_completion)
 
         stats = await agent_tasks_endpoint._auto_generate_managed_vulnerability_reports(
             db=db,
@@ -869,8 +981,8 @@ async def test_auto_generate_managed_reports_skips_when_verification_enabled(mon
 
     await engine.dispose()
 
-    assert stats == {'generated': 0, 'failed': 0, 'skipped': 1}
-    assert managed_result.scalars().all() == []
+    assert stats == {'generated': 1, 'failed': 0, 'skipped': 0}
+    assert len(managed_result.scalars().all()) == 1
     assert message_result.scalars().all() == []
 
 
@@ -981,13 +1093,156 @@ async def test_auto_generate_managed_reports_runs_when_verification_config_missi
     assert managed.report_generation_status == 'completed'
 
 
+@pytest.mark.asyncio
+async def test_generate_managed_report_bundle_uses_unbounded_report_continuation(monkeypatch):
+    captured: dict[str, object] = {}
+
+    class FakeBridge:
+        def prepare_report_generation_continuation(self, **kwargs):
+            captured["prepare_kwargs"] = kwargs
+
+        async def continue_session_until_report_payload(self, **kwargs):
+            captured.update(kwargs)
+            bundle = _valid_generated_report_bundle()
+            return {
+                "final_payload": {
+                    "report_en": bundle.report_en,
+                    "report_zh": bundle.report_zh,
+                    "report_cve": bundle.report_cve,
+                }
+            }
+
+    class FakeSandbox:
+        async def cleanup(self):
+            captured["cleanup"] = True
+
+    async def fake_build_runtime_follow_up_context(**kwargs):
+        del kwargs
+        return FakeBridge(), FakeSandbox(), "finding-runtime", 99
+
+    monkeypatch.setattr(
+        "app.api.v1.endpoints.audit_sessions._build_runtime_follow_up_context",
+        fake_build_runtime_follow_up_context,
+    )
+
+    managed = ManagedVulnerability(
+        id="managed-1",
+        project_id="project-1",
+        task_id="task-1",
+        finding_id="finding-1",
+        project_name="Demo Project",
+        version_label="v1.0.0",
+        vulnerability_name="SSRF in fetch endpoint",
+        vulnerability_type="ssrf",
+        severity="high",
+    )
+
+    result = await agent_tasks_endpoint._generate_managed_report_bundle_from_session(
+        db=None,
+        session=SimpleNamespace(id="session-1", runtime_stack=FindingRuntimeStack.RUNTIME.value),
+        task=SimpleNamespace(created_by="user-1"),
+        finding=SimpleNamespace(id="finding-1"),
+        managed_vulnerability=managed,
+        report_service=VulnerabilityReportGenerationService(),
+    )
+
+    assert isinstance(result, GeneratedReportBundle)
+    prepare_kwargs = captured["prepare_kwargs"]
+    assert prepare_kwargs["session_id"] == "session-1"
+    assert "report generation continuation runtime" in prepare_kwargs["system_prompt"]
+    assert "<report_generation_context>" in prepare_kwargs["context_message"]
+    assert "managed-1" in prepare_kwargs["context_message"]
+    assert prepare_kwargs["metadata"]["kind"] == "internal_managed_report_request"
+    assert captured["max_turns"] is None
+    assert captured["finalizer_prompts"] == []
+    assert "FinalizeVulnerabilityReports" in str(captured["terminal_action_nudge_message"])
+    assert captured["cleanup"] is True
+
+
 def test_disabled_managed_report_stats_skips_all_persisted_findings():
     stats = agent_tasks_endpoint._disabled_managed_report_stats(
         [SimpleNamespace(id='finding-1'), SimpleNamespace(id='finding-2')]
     )
 
-    assert agent_tasks_endpoint.AUTO_MANAGED_REPORT_POSTPROCESSING_ENABLED is False
+    assert agent_tasks_endpoint.AUTO_MANAGED_REPORT_POSTPROCESSING_ENABLED is True
     assert stats == {'generated': 0, 'failed': 0, 'skipped': 2}
+
+
+@pytest.mark.asyncio
+async def test_sync_managed_vulnerability_records_imports_findings_without_generating_reports(monkeypatch):
+    engine = create_async_engine('sqlite+aiosqlite:///:memory:')
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+    async with session_factory() as db:
+        user = User(
+            id='user-1',
+            email='owner@example.com',
+            hashed_password='not-a-real-hash',
+            full_name='Owner',
+            is_active=True,
+        )
+        project = Project(
+            id='project-1',
+            name='Managed Project',
+            owner_id=user.id,
+            source_type='repository',
+            repository_url='https://example.com/repo.git',
+        )
+        task = AgentTask(
+            id='task-1',
+            project_id=project.id,
+            created_by=user.id,
+            name='Runtime audit',
+            version_label='runtime-test',
+            status=AgentTaskStatus.COMPLETED,
+        )
+        finding = AgentFinding(
+            id='finding-1',
+            task_id=task.id,
+            title='SSRF in fetch endpoint',
+            severity='high',
+            vulnerability_type='ssrf',
+            description='User controlled target reaches outbound HTTP client.',
+            file_path='app/api.py',
+            line_start=21,
+            line_end=22,
+            finding_metadata={'raw_finding': {'impact': 'Internal service exposure'}},
+        )
+        db.add_all([user, project, task, finding])
+        await db.commit()
+
+        async def fail_chat_completion(self, *args, **kwargs):
+            raise AssertionError('chat_completion should not be called when importing managed vulnerability records')
+
+        monkeypatch.setattr('app.services.llm.service.LLMService.chat_completion', fail_chat_completion)
+
+        stats = await agent_tasks_endpoint._sync_managed_vulnerability_records(
+            db=db,
+            task=task,
+            findings=[finding],
+        )
+        await db.commit()
+
+        managed_result = await db.execute(
+            select(ManagedVulnerability)
+            .options(selectinload(ManagedVulnerability.reports))
+            .where(ManagedVulnerability.task_id == task.id)
+        )
+        managed = managed_result.scalar_one()
+
+    await engine.dispose()
+
+    assert agent_tasks_endpoint.AUTO_MANAGED_REPORT_POSTPROCESSING_ENABLED is True
+    assert stats == {'created': 1, 'existing': 0, 'failed': 0}
+    assert managed.finding_id == 'finding-1'
+    assert managed.vulnerability_name == 'SSRF in fetch endpoint'
+    assert managed.report_generation_status == 'pending'
+    assert {report.report_kind for report in managed.reports} == {'en', 'zh', 'cve'}
+    assert all(report.generation_status == 'pending' for report in managed.reports)
+    assert all(report.markdown_content == '' for report in managed.reports)
 
 
 @pytest.mark.asyncio

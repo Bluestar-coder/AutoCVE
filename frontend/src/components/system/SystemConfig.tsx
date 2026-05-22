@@ -82,6 +82,8 @@ const DEFAULT_AGENT_CONFIG: AgentModelConfig = {
   llmTimeout: null,
   llmTemperature: null,
   llmMaxTokens: null,
+  endpointProtocol: 'openai_compatible',
+  toolMessageFormat: 'auto',
   maxIterations: null,
   env: {},
   alwaysThinkingEnabled: false,
@@ -157,6 +159,8 @@ function cloneModelProfile(input?: Partial<ModelProfileConfig>): ModelProfileCon
     llmTimeout: input?.llmTimeout ?? null,
     llmTemperature: input?.llmTemperature ?? null,
     llmMaxTokens: input?.llmMaxTokens ?? null,
+    endpointProtocol: input?.endpointProtocol || 'openai_compatible',
+    toolMessageFormat: input?.toolMessageFormat || 'auto',
     env: input?.env || {},
   };
 }
@@ -172,6 +176,8 @@ function buildProfileFromGlobal(id: string, name: string, config: GlobalModelCon
     llmTimeout: config.llmTimeout,
     llmTemperature: config.llmTemperature,
     llmMaxTokens: config.llmMaxTokens,
+    endpointProtocol: config.endpointProtocol,
+    toolMessageFormat: config.toolMessageFormat,
     env,
   });
 }
@@ -253,6 +259,8 @@ export function SystemConfig() {
     llmTimeout: 150000,
     llmTemperature: 0.1,
     llmMaxTokens: 4096,
+    endpointProtocol: 'openai_compatible',
+    toolMessageFormat: 'auto',
     env: {} as Record<string, string>,
   });
   const [agentConfigs, setAgentConfigs] = useState<Record<AgentType, AgentModelConfig>>({
@@ -313,6 +321,8 @@ export function SystemConfig() {
         llmTimeout: llmConfig.llmTimeout || 150000,
         llmTemperature: llmConfig.llmTemperature ?? 0.1,
         llmMaxTokens: llmConfig.llmMaxTokens || 4096,
+        endpointProtocol: llmConfig.endpointProtocol || 'openai_compatible',
+        toolMessageFormat: llmConfig.toolMessageFormat || 'auto',
         env: llmConfig.env || {},
       });
       setGlobalEnvText(stringifyEnvPayload(llmConfig.env));
@@ -405,6 +415,8 @@ export function SystemConfig() {
       llmTimeout: selectedProfile.llmTimeout ?? prev.llmTimeout,
       llmTemperature: selectedProfile.llmTemperature ?? prev.llmTemperature,
       llmMaxTokens: selectedProfile.llmMaxTokens ?? prev.llmMaxTokens,
+      endpointProtocol: selectedProfile.endpointProtocol || 'openai_compatible',
+      toolMessageFormat: selectedProfile.toolMessageFormat || 'auto',
       env: selectedProfile.env || {},
     }));
     setGlobalEnvText(stringifyEnvPayload(selectedProfile.env));
@@ -475,6 +487,8 @@ export function SystemConfig() {
         apiKey: globalConfig.llmApiKey,
         model: globalConfig.llmModel,
         baseUrl: globalConfig.llmBaseUrl,
+        endpointProtocol: globalConfig.endpointProtocol,
+        toolMessageFormat: globalConfig.toolMessageFormat,
         prompt: 'Reply with exactly: connection-ok',
       });
       if (result.success) {
@@ -728,6 +742,44 @@ export function SystemConfig() {
                 onChange={(event) => setGlobalConfig((prev) => ({ ...prev, llmBaseUrl: event.target.value }))}
                 placeholder="留空则使用默认地址"
               />
+            </div>
+            <div className={cn(SOFT_PANEL_CLASS, 'p-4')}>
+              <Label className="text-sm font-semibold text-[#31423a]">Endpoint protocol</Label>
+              <Select
+                value={globalConfig.endpointProtocol}
+                onValueChange={(value) =>
+                  setGlobalConfig((prev) => ({
+                    ...prev,
+                    endpointProtocol: value,
+                    toolMessageFormat: prev.toolMessageFormat === 'auto' ? 'auto' : prev.toolMessageFormat,
+                  }))
+                }
+              >
+                <SelectTrigger className={cn(INPUT_CLASS, 'mt-3')}>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="openai_compatible">OpenAI-compatible</SelectItem>
+                  <SelectItem value="anthropic_messages">Anthropic Messages</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div className={cn(SOFT_PANEL_CLASS, 'p-4')}>
+              <Label className="text-sm font-semibold text-[#31423a]">Tool message format</Label>
+              <Select
+                value={globalConfig.toolMessageFormat}
+                onValueChange={(value) => setGlobalConfig((prev) => ({ ...prev, toolMessageFormat: value }))}
+              >
+                <SelectTrigger className={cn(INPUT_CLASS, 'mt-3')}>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="auto">Follow protocol</SelectItem>
+                  <SelectItem value="openai_tools">OpenAI tool calls</SelectItem>
+                  <SelectItem value="anthropic_blocks">Anthropic tool blocks</SelectItem>
+                  <SelectItem value="legacy_text">Legacy text replay</SelectItem>
+                </SelectContent>
+              </Select>
             </div>
             <div className={cn(SOFT_PANEL_CLASS, 'p-4 xl:col-span-2')}>
               <Label className="text-sm font-semibold text-[#31423a]">手动配置 Env（JSON）</Label>

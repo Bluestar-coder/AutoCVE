@@ -127,6 +127,54 @@ class _StreamingRetryProbeAdapter:
         }
 
 
+class _StreamingUnknownErrorEventAdapter:
+    def __init__(self, failures_before_success: int):
+        self.failures_before_success = failures_before_success
+        self.calls = 0
+
+    async def complete(self, request):
+        raise AssertionError("chat_completion_stream should use adapter.stream_complete")
+
+    async def stream_complete(self, request):
+        self.calls += 1
+        if self.calls <= self.failures_before_success:
+            yield {
+                "type": "error",
+                "error_type": "unknown",
+                "error": "",
+                "user_message": "LLM streaming request failed. Please retry.",
+                "accumulated": "",
+            }
+            return
+        yield {"type": "token", "content": "recovered", "accumulated": "recovered"}
+        yield {
+            "type": "done",
+            "content": "recovered",
+            "finish_reason": "stop",
+            "usage": {"prompt_tokens": 3, "completion_tokens": 2, "total_tokens": 5},
+            "tool_calls": [],
+        }
+
+
+class _StreamingReasoningThenErrorAdapter:
+    def __init__(self):
+        self.calls = 0
+
+    async def complete(self, request):
+        raise AssertionError("chat_completion_stream should use adapter.stream_complete")
+
+    async def stream_complete(self, request):
+        self.calls += 1
+        yield {"type": "reasoning_delta", "content": "Need native history.", "accumulated": "Need native history."}
+        yield {
+            "type": "error",
+            "error_type": "connection",
+            "error": "No available accounts after reasoning",
+            "user_message": "No available accounts after reasoning",
+            "accumulated": "",
+        }
+
+
 @pytest.mark.asyncio
 async def test_llm_service_respects_user_configured_llm_concurrency(monkeypatch):
     adapter = _ConcurrencyProbeAdapter()
@@ -309,6 +357,58 @@ async def test_llm_service_chat_completion_stream_retries_connection_failures_be
     assert events[1]["attempt"] == 2
     assert events[2]["content"] == "恢复"
     assert adapter.calls == 3
+
+
+@pytest.mark.asyncio
+async def test_llm_service_chat_completion_stream_retries_unknown_empty_error_before_first_output(monkeypatch):
+    adapter = _StreamingUnknownErrorEventAdapter(failures_before_success=2)
+    service = LLMService(
+        user_config={
+            "llmConfig": {
+                "llmProvider": "openai",
+                "llmApiKey": "test-key",
+                "llmModel": "test-model",
+            }
+        }
+    )
+
+    monkeypatch.setattr("app.services.llm.service.LLMFactory.create_adapter", lambda config: adapter)
+
+    events = []
+    async for event in service.chat_completion_stream(
+        messages=[{"role": "user", "content": "retry unknown stream"}],
+    ):
+        events.append(event)
+
+    assert [event["type"] for event in events] == ["llm_retry", "llm_retry", "token", "done"]
+    assert events[0]["error_type"] == "connection"
+    assert adapter.calls == 3
+
+
+@pytest.mark.asyncio
+async def test_llm_service_chat_completion_stream_does_not_retry_after_reasoning_output(monkeypatch):
+    adapter = _StreamingReasoningThenErrorAdapter()
+    service = LLMService(
+        user_config={
+            "llmConfig": {
+                "llmProvider": "deepseek",
+                "llmApiKey": "test-key",
+                "llmModel": "deepseek-reasoner",
+            }
+        }
+    )
+
+    monkeypatch.setattr("app.services.llm.service.LLMFactory.create_adapter", lambda config: adapter)
+
+    events = []
+    async for event in service.chat_completion_stream(
+        messages=[{"role": "user", "content": "use tools"}],
+    ):
+        events.append(event)
+
+    assert [event["type"] for event in events] == ["reasoning_delta", "error"]
+    assert adapter.calls == 1
+    assert events[-1]["error"] == "No available accounts after reasoning"
 
 
 @pytest.mark.asyncio

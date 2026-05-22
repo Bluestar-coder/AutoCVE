@@ -23,7 +23,7 @@ def _record(name: str, content: str, *, status: str = "completed", is_error: boo
 
 def test_build_between_turn_attachments_emits_tool_attachment_summary():
     attachments = build_between_turn_attachments(
-        state=QueryLoopState(),
+        state=QueryLoopState(tool_use_context={"native_tool_history": False}),
         records=[_record("echo", "repo summary"), _record("grep", "match lines")],
         session_snapshot=None,
     )
@@ -36,7 +36,7 @@ def test_build_between_turn_attachments_emits_tool_attachment_summary():
 
 def test_start_pending_tool_use_summary_returns_ready_summary_payload():
     summary = start_pending_tool_use_summary(
-        state=QueryLoopState(),
+        state=QueryLoopState(tool_use_context={"native_tool_history": False}),
         records=[_record("echo", "repo summary"), _record("grep", "match lines", status="failed", is_error=True)],
         session_snapshot=None,
     )
@@ -46,3 +46,18 @@ def test_start_pending_tool_use_summary_returns_ready_summary_payload():
     assert summary["tool_names"] == ["echo", "grep"]
     assert "Tool-use summary" in summary["summary_message"]
     assert "grep: failed" in summary["summary_message"]
+
+
+def test_tool_attachments_are_hidden_when_native_tool_history_is_enabled():
+    state = QueryLoopState(tool_use_context={"native_tool_history": True})
+
+    assert build_between_turn_attachments(
+        state=state,
+        records=[_record("echo", "repo summary")],
+        session_snapshot=None,
+    ) == []
+    assert start_pending_tool_use_summary(
+        state=state,
+        records=[_record("echo", "repo summary")],
+        session_snapshot=None,
+    ) is None

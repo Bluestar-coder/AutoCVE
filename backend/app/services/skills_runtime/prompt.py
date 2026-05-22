@@ -29,7 +29,14 @@ def build_skill_prompt_state(
     if not available_entries:
         return SkillPromptState(entries=[], matched=matched, prompt="", route_plan=resolved_route_plan)
 
-    lines = ["<available_skills>"]
+    lines = [
+        "<skill_usage_rules>",
+        "如果某个 Skill 与用户任务语义匹配，或用户/系统提示显式提到了某个 Skill，必须先调用 Skill(action=\"body\") 阅读完整 SKILL.md，再输出任何与该任务相关的审计结论、计划或报告。",
+        "读完 SKILL.md 后，必须按其中的启动流程继续调用 Skill(action=\"read_resource\", resource_name=...) 读取必读 references、checklists、examples 或 scripts；不能把 available_skills、route_plan、discovery 结果当作已阅读 Skill 的替代。",
+        "discovery 和 list_resources 只用于发现候选资源，不会自动加载正文；真正开始工作前需要通过 Skill 工具留下可审计的调用记录。",
+        "</skill_usage_rules>",
+        "<available_skills>",
+    ]
     for entry in ordered_entries:
         lines.append("<skill>")
         lines.append(f"<name>{entry.name}</name>")

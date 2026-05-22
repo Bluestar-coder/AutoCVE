@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import asyncio
 
@@ -6,7 +6,11 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from app.db.base import Base
-from app.services.finding_runtime.bridge import FindingRuntimeBridge, RuntimeLLMModelClient
+from app.services.finding_runtime.bridge import (
+    FindingRuntimeBridge,
+    NATIVE_TOOL_CALLING_REMINDER,
+    RuntimeLLMModelClient,
+)
 from app.services.finding_runtime.models import (
     RuntimeCompletionMode,
     RuntimeMemoryBundle,
@@ -60,10 +64,56 @@ class FakeLLMService:
             yield event
 
 
+class FakeLLMServiceWithConfig(FakeLLMService):
+    def __init__(self, *, provider: str, endpoint_protocol: str, tool_message_format: str = "auto"):
+        super().__init__(responses=[])
+        self.config = type(
+            "Config",
+            (),
+            {
+                "provider": type("Provider", (), {"value": provider})(),
+                "endpoint_protocol": endpoint_protocol,
+                "tool_message_format": tool_message_format,
+            },
+        )()
+
+
 def build_session_factory():
     engine = create_engine("sqlite:///:memory:")
     Base.metadata.create_all(engine)
     return sessionmaker(bind=engine)
+
+
+def test_report_generation_tool_registry_excludes_skill_tool():
+    bridge = FindingRuntimeBridge(
+        llm_service=FakeLLMService([]),
+        tools={
+            "read_file": FakeAgentTool("read_file"),
+            "list_files": FakeAgentTool("list_files"),
+            "search_code": FakeAgentTool("search_code"),
+            "Skill": FakeAgentTool("Skill"),
+        },
+    )
+
+    tool_names = {tool.name for tool in bridge._build_report_generation_tool_registry().all_tools()}
+
+    assert "FinalizeVulnerabilityReports" in tool_names
+    assert {"Read", "Glob", "Grep"}.issubset(tool_names)
+    assert "Skill" not in tool_names
+
+
+def test_runtime_model_client_uses_openai_tool_messages_for_claude_openai_compatible():
+    llm = FakeLLMServiceWithConfig(provider="claude", endpoint_protocol="openai_compatible")
+    client = RuntimeLLMModelClient(llm_service=llm, agent_type="finding")
+
+    assert client._resolve_tool_message_format().value == "openai_tools"
+
+
+def test_runtime_model_client_uses_anthropic_blocks_for_anthropic_endpoint():
+    llm = FakeLLMServiceWithConfig(provider="claude", endpoint_protocol="anthropic")
+    client = RuntimeLLMModelClient(llm_service=llm, agent_type="finding")
+
+    assert client._resolve_tool_message_format().value == "anthropic_blocks"
 
 
 def test_bridge_finalizes_non_json_assistant_reply(monkeypatch):
@@ -455,6 +505,15 @@ def test_bridge_skips_system_transcript_messages_when_building_model_payload():
     assert llm.calls[-1]["messages"][1] == {"role": "user", "content": "inspect"}
 
 
+def test_native_tool_calling_reminder_requires_actual_tool_call_or_terminal_json():
+    assert "工具调用协议" in NATIVE_TOOL_CALLING_REMINDER
+    assert "必须在同一条 assistant 响应中实际发起原生结构化工具调用" in NATIVE_TOOL_CALLING_REMINDER
+    assert "如果还需要证据：直接调用 Read/Grep/Glob/Skill/PowerShell" in NATIVE_TOOL_CALLING_REMINDER
+    assert '输出可解析的 {"findings": [...], "summary": "..."} JSON' in NATIVE_TOOL_CALLING_REMINDER
+    assert "禁止只回复“我将继续/让我继续/下一步我会...”" in NATIVE_TOOL_CALLING_REMINDER
+    assert "不要输出伪工具语法" in NATIVE_TOOL_CALLING_REMINDER
+
+
 def test_bridge_extracts_json_from_mixed_final_answer():
     payload = FindingRuntimeBridge._parse_payload(
         "Thought: enough evidence collected.\nFinal Answer: {\"findings\": [{\"title\": \"auth bypass\"}], \"summary\": \"done\"}"
@@ -691,7 +750,7 @@ def test_bridge_continue_session_uses_discovery_selected_skill(monkeypatch):
 
     async def fake_get_skill_body(user_id, skill_ref, agent_type=None):
         del user_id, agent_type
-        return {"skill": skill_ref, "content": f"bootstrap for {skill_ref}"}
+        raise AssertionError(f"discovery must not auto-load skill body for {skill_ref}")
 
     monkeypatch.setattr(
         "app.services.finding_runtime.skills.RuntimeSkillCatalog.preload",
@@ -733,8 +792,9 @@ def test_bridge_continue_session_uses_discovery_selected_skill(monkeypatch):
     snapshot = store.load_session_snapshot(session_id)
     refreshed_runtime_state = store.load_runtime_state(session_id)
 
-    assert "主技能启动内容：cve-report-writer" in (snapshot.session.system_prompt or "")
-    assert "bootstrap for cve-report-writer" in (snapshot.session.system_prompt or "")
+    assert "Discovery scheduler selected: cve-report-writer" in (snapshot.session.system_prompt or "")
+    assert "bootstrap for cve-report-writer" not in (snapshot.session.system_prompt or "")
+    assert store.list_skill_invocations(session_id) == []
     assert refreshed_runtime_state.metadata["skill_discovery"]["finding"]["selected_skill"] == "cve-report-writer"
 
 def test_runtime_model_client_classifies_max_output_tokens_responses():
@@ -961,6 +1021,46 @@ def test_runtime_model_client_stream_complete_emits_tool_call_events_before_done
     assert events[2]["content"] == "Need tool"
 
 
+def test_runtime_model_client_stream_complete_does_not_reemit_done_tool_calls():
+    class StreamingLLMService(FakeLLMService):
+        async def chat_completion_stream(self, *, messages, agent_type, tools, parallel_tool_calls, max_tokens=None):
+            self.calls.append({"messages": messages, "tools": tools, "max_tokens": max_tokens, "streaming": True})
+            yield {"type": "token", "content": "Need ", "accumulated": "Need "}
+            yield {"type": "tool_call", "tool_call": {"id": "tool-1", "name": "Read", "input": {"file_path": "README.md"}}}
+            yield {
+                "type": "done",
+                "content": "Need tool",
+                "finish_reason": "tool_calls",
+                "tool_calls": [
+                    {"id": "tool-1", "name": "Read", "input": {"file_path": "README.md"}},
+                ],
+            }
+
+    llm = StreamingLLMService([])
+    llm_client = __import__("app.services.finding_runtime.bridge", fromlist=["RuntimeLLMModelClient"]).RuntimeLLMModelClient(
+        llm_service=llm,
+        agent_type="finding",
+    )
+
+    async def collect_events():
+        events = []
+        async for event in llm_client.stream_complete(
+            system_prompt="system",
+            recon_payload={},
+            transcript=[TranscriptItem(role=RuntimeMessageRole.USER, content="inspect")],
+            model_name="finding",
+            tool_definitions=[{"name": "Read", "description": "read", "input_schema": {"type": "object"}}],
+        ):
+            events.append(event)
+        return events
+
+    events = asyncio.run(collect_events())
+
+    assert [event["type"] for event in events] == ["content_delta", "tool_call", "done"]
+    assert [event["tool_call"]["id"] for event in events if event["type"] == "tool_call"] == ["tool-1"]
+    assert events[-1]["tool_calls"][0]["id"] == "tool-1"
+
+
 def test_runtime_model_client_stream_complete_passthroughs_llm_retry_events():
     class StreamingLLMService(FakeLLMService):
         async def chat_completion_stream(self, *, messages, agent_type, tools, parallel_tool_calls, max_tokens=None):
@@ -1018,6 +1118,43 @@ def test_runtime_model_client_tool_use_history_is_mapped_as_user_context_note():
     assert mapped["role"] == "user"
     assert "Tool Call:" not in mapped["content"]
     assert "先前工具请求历史" in mapped["content"]
+
+
+def test_runtime_model_client_build_messages_uses_native_openai_tool_history():
+    messages = RuntimeLLMModelClient._build_messages(
+        system_prompt="system",
+        recon_payload={},
+        tool_definitions=[{"name": "Read"}],
+        transcript=[
+            TranscriptItem(role=RuntimeMessageRole.USER, content="inspect"),
+            TranscriptItem(role=RuntimeMessageRole.ASSISTANT, content="Reading."),
+            TranscriptItem(
+                role=RuntimeMessageRole.TOOL_USE,
+                content="",
+                name="Read",
+                payload={
+                    "tool_use_id": "tool-use-1",
+                    "tool_name": "Read",
+                    "input": {"path": "src/auth.py"},
+                },
+            ),
+            TranscriptItem(
+                role=RuntimeMessageRole.TOOL_RESULT,
+                content="source",
+                name="Read",
+                payload={"tool_use_id": "tool-use-1", "tool_name": "Read"},
+            ),
+        ],
+    )
+
+    assert messages[2]["role"] == "assistant"
+    assert messages[2]["tool_calls"][0]["id"] == "tool-use-1"
+    assert messages[3] == {
+        "role": "tool",
+        "tool_call_id": "tool-use-1",
+        "name": "Read",
+        "content": "source",
+    }
 
 def test_runtime_model_client_assistant_history_sanitizes_legacy_text_tool_calls_into_user_context_note():
     mapped = RuntimeLLMModelClient._map_transcript_item(

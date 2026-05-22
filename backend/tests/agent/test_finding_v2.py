@@ -2262,3 +2262,56 @@ async def test_finding_runtime_stack_skips_handoff_for_fallback_recovered_result
     assert result.data["runtime_completion_mode"] == RuntimeCompletionMode.FALLBACK_RECOVERED.value
     assert "Finding 未完成" in result.error
 
+
+@pytest.mark.asyncio
+async def test_runtime_stack_model_error_reports_llm_failure_reason(monkeypatch):
+    class FakeBridge:
+        async def run(self, **kwargs):
+            return {
+                "session_id": "session-model-error",
+                "turn_count": 3,
+                "tool_call_count": 4,
+                "final_payload": {
+                    "findings": [],
+                    "summary": "Runtime stopped after model error.",
+                    "runtime_completion_mode": RuntimeCompletionMode.INCOMPLETE.value,
+                    "is_final": False,
+                    "requires_retry": True,
+                    "runtime_error": {
+                        "stop_reason": RuntimeStopReason.MODEL_ERROR.value,
+                        "message": "LLM streaming request failed. Please retry.",
+                    },
+                },
+                "runner_result": TurnExecutionResult(
+                    turn_id="turn-1",
+                    stop_reason=RuntimeStopReason.MODEL_ERROR,
+                    completion_mode=RuntimeCompletionMode.INCOMPLETE,
+                ),
+                "skill_route": {},
+                "memory_counts": {},
+            }
+
+        def record_handoff(self, session_id, payload):
+            raise AssertionError("handoff should not be recorded for incomplete model errors")
+
+    agent = FindingAgent(llm_service=MagicMock(), tools={}, event_emitter=MagicMock())
+    monkeypatch.setattr(agent, "_build_runtime_bridge", lambda user_id: FakeBridge())
+    monkeypatch.setattr(
+        "app.services.agent.skill_service.SkillService.resolve_agent_skills",
+        AsyncMock(return_value={"route_plan": {}, "matched": [], "metadata": []}),
+    )
+
+    result = await agent.run(
+        {
+            "project_id": "project-1",
+            "project_info": {"name": "demo", "project_id": "project-1", "root": "."},
+            "config": {"finding_runtime_stack": "runtime"},
+            "task": "audit",
+            "previous_results": {},
+        }
+    )
+
+    assert result.success is False
+    assert "模型流式请求失败" in result.error
+    assert "LLM streaming request failed" in result.error
+

@@ -131,7 +131,7 @@ export const api = {
   },
 
   async deleteProject(id: string): Promise<void> {
-    await apiClient.delete(`/projects/${id}`);
+    await apiClient.delete(`/projects/${id}/permanent`);
   },
 
   async getDeletedProjects(): Promise<Project[]> {

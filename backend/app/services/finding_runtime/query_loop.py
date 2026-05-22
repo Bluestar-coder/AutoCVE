@@ -92,6 +92,7 @@ class QueryLoop:
         event_sink=None,
         require_terminal_action: bool = False,
         terminal_action_nudge_limit: int = 1,
+        terminal_action_nudge_message: str | None = None,
     ):
         self._session_store = session_store
         self._model_client = model_client
@@ -100,6 +101,7 @@ class QueryLoop:
         self._event_sink = event_sink
         self._require_terminal_action = bool(require_terminal_action)
         self._terminal_action_nudge_limit = max(0, int(terminal_action_nudge_limit or 0))
+        self._terminal_action_nudge_message = str(terminal_action_nudge_message or "").strip() or None
 
     async def run_turn(self, *, session_id: str, model_name: str) -> TurnExecutionResult:
         snapshot = self._session_store.load_session_snapshot(session_id)
@@ -187,7 +189,11 @@ class QueryLoop:
                 messages=state.messages,
                 stop_reason=RuntimeStopReason.MODEL_ERROR,
                 status="model_error",
-                checkpoint_extra={"phase": "model", "error": str(exc)},
+                checkpoint_extra={
+                    "phase": "model",
+                    "error": str(exc).strip() or repr(exc),
+                    "error_class": exc.__class__.__name__,
+                },
             )
 
         model_response = collected["model_response"]
@@ -217,7 +223,8 @@ class QueryLoop:
                     content=(
                         "你刚刚使用了纯文本工具调用语法（例如 Tool Call:/Action:），这类内容不会被执行。"
                         "如果还需要继续审计，请改用模型提供方原生的结构化工具调用重新发起同一动作。"
-                        "如果已经完成审计，请直接调用 FinalizeFinding 提交最终结构化结果。"
+                        "如果你已经充分完成主要攻击面覆盖，并且准备结束整个 Finding 阶段，请调用 FinalizeFinding 提交最终结构化结果。"
+                        "如果只是已有一个漏洞或仍有高风险方向未检查，请继续调用工具审计，不要提前终止。"
                     ),
                     name="legacy_tool_syntax_nudge",
                     metadata={"synthetic": True, "kind": "legacy_tool_syntax_nudge"},
@@ -564,17 +571,23 @@ class QueryLoop:
                     content=(
                         "你刚刚表达了还要继续审查的意图，但没有真正执行动作。"
                         "如果还需要继续收集证据，请直接调用下一次工具；"
-                        "如果已经完成审计，请立即调用 FinalizeFinding 提交最终结构化结果。"
+                        "如果你已经充分完成主要攻击面覆盖，并且准备结束整个 Finding 阶段，请调用 FinalizeFinding 提交最终结构化结果。"
+                        "如果只是已有一个漏洞或仍有高风险方向未检查，请继续调用工具审计，不要提前终止。"
                         "不要只描述下一步计划而不执行。"
                     ),
                     name="terminal_action_nudge",
                     metadata={"synthetic": True, "kind": "terminal_action_nudge"},
                 )
-                nudge_message.content = (
-                    "你刚才没有发起工具调用，也没有调用 FinalizeFinding。Finding 阶段不能用普通文字结束。\n\n"
-                    "如果仍需验证，请立即调用 Read/Grep/Glob/PowerShell 等工具继续查看证据。\n"
-                    "如果审计已经完成，请立即调用 FinalizeFinding，提交 findings 和 summary。\n"
-                    "不要只回复说明文字。"
+                nudge_message.content = self._terminal_action_nudge_message or (
+                    "你的上一条回复没有发起任何工具调用，也没有提交最终结构化结果，因此 Finding 阶段尚未完成。\n\n"
+                    "下一条 assistant 响应必须满足以下二选一：\n"
+                    "1. 如果还需要继续审计、追踪、读取、搜索、验证、补齐证据，或还没有充分覆盖主要高风险攻击面，必须立即调用 "
+                    "Read/Grep/Glob/Skill/PowerShell 等合适工具。\n"
+                    "2. 如果已经充分完成主要攻击面覆盖，并且准备结束整个 Finding 阶段，必须调用 FinalizeFinding；或输出严格可解析的 "
+                    "{\"findings\": [...], \"summary\": \"...\"} JSON。\n\n"
+                    "发现第一个完整漏洞不等于审计完成；FinalizeFinding 调用成功后会终止 Finding 阶段，不要把它当作阶段性保存工具。\n"
+                    "不要再只用自然语言说明“继续审计”“让我检查”“下一步会做什么”。"
+                    "继续就必须实际调用工具，完成就必须提交结构化终点。"
                 )
                 next_state = build_continue_state(state, messages=[*working_messages, nudge_message], transition=transition)
                 next_state.tool_use_context["missing_terminal_action_nudge_count"] = int(
@@ -769,6 +782,7 @@ class QueryLoop:
         payload = dict(response or {})
         return RuntimeModelResponse(
             content=str(payload.get("content") or ""),
+            reasoning_content=str(payload.get("reasoning_content") or ""),
             tool_calls=list(payload.get("tool_calls") or []),
             stop_reason=str(payload.get("stop_reason")) if payload.get("stop_reason") is not None else None,
             recoverable_error_kind=str(payload.get("recoverable_error_kind")) if payload.get("recoverable_error_kind") else None,
@@ -776,7 +790,7 @@ class QueryLoop:
             usage=dict(payload.get("usage") or {}),
             native_tool_call_count=len(list(payload.get("tool_calls") or [])),
             has_terminal_tool_call=any(
-                str((item or {}).get("name") or "").strip() == "FinalizeFinding"
+                str((item or {}).get("name") or "").strip() in {"FinalizeFinding", "FinalizeVulnerabilityReports"}
                 for item in list(payload.get("tool_calls") or [])
                 if isinstance(item, dict)
             ),
@@ -875,8 +889,16 @@ class QueryLoop:
             )
             assistant_message_id = None
             working_messages = list(state.messages)
-            if model_response.content:
-                assistant_item = TranscriptItem(role=RuntimeMessageRole.ASSISTANT, content=model_response.content)
+            if model_response.content or model_response.reasoning_content or model_response.tool_calls:
+                assistant_item = TranscriptItem(
+                    role=RuntimeMessageRole.ASSISTANT,
+                    content=model_response.content,
+                    payload=(
+                        {"reasoning_content": model_response.reasoning_content}
+                        if model_response.reasoning_content
+                        else {}
+                    ),
+                )
                 assistant_message_id = self._session_store.append_message(session_id, assistant_item)
                 working_messages.append(assistant_item)
                 if self._event_sink is not None:
@@ -956,6 +978,7 @@ class QueryLoop:
         tool_use_context = dict(state.tool_use_context or {})
         assistant_message_id: str | None = None
         assistant_content = ""
+        assistant_reasoning_content = ""
         stream_done: dict[str, Any] | None = None
         assistant_stream_started = False
         executor = None
@@ -1006,9 +1029,35 @@ class QueryLoop:
                 if assistant_message_id is not None:
                     self._session_store.update_message_content(assistant_message_id, content=assistant_content)
                     self._update_working_message_content(working_messages, assistant_message_id, assistant_content)
+            elif event_type == "reasoning_delta":
+                reasoning_delta_content = str((event or {}).get("content") or "")
+                assistant_reasoning_content = str(
+                    (event or {}).get("accumulated")
+                    or (assistant_reasoning_content + reasoning_delta_content)
+                )
+                await self._emit_event(
+                    {
+                        "type": "reasoning_delta",
+                        "content": reasoning_delta_content,
+                        "accumulated": assistant_reasoning_content,
+                    }
+                )
+                if assistant_message_id is not None:
+                    self._session_store.update_message_payload(
+                        assistant_message_id,
+                        payload={"reasoning_content": assistant_reasoning_content},
+                        merge=True,
+                    )
+                    self._update_working_message_payload(
+                        working_messages,
+                        assistant_message_id,
+                        {"reasoning_content": assistant_reasoning_content},
+                    )
             elif event_type == "tool_call":
                 request = self._tool_request_from_event(event, fallback_index=len(tool_requests) + 1)
                 if request is None:
+                    continue
+                if any(existing.id == request.id for existing in tool_requests):
                     continue
                 if self._event_sink is not None and not assistant_stream_started:
                     assistant_stream_started = True
@@ -1032,6 +1081,7 @@ class QueryLoop:
                         session_id=session_id,
                         working_messages=working_messages,
                         content=assistant_content,
+                        reasoning_content=assistant_reasoning_content,
                     )
                 self._append_tool_use_message(session_id=session_id, working_messages=working_messages, request=request)
                 tool_requests.append(request)
@@ -1051,15 +1101,27 @@ class QueryLoop:
             elif event_type == "done":
                 stream_done = dict(event or {})
                 assistant_content = str(stream_done.get("content") or assistant_content)
-                if assistant_message_id is None and assistant_content:
+                assistant_reasoning_content = str(stream_done.get("reasoning_content") or assistant_reasoning_content)
+                if assistant_message_id is None and (assistant_content or assistant_reasoning_content):
                     assistant_message_id = self._append_streaming_assistant_message(
                         session_id=session_id,
                         working_messages=working_messages,
                         content=assistant_content,
+                        reasoning_content=assistant_reasoning_content,
                     )
                 elif assistant_message_id is not None:
                     self._session_store.update_message_content(assistant_message_id, content=assistant_content)
                     self._update_working_message_content(working_messages, assistant_message_id, assistant_content)
+                    self._session_store.update_message_payload(
+                        assistant_message_id,
+                        payload={"reasoning_content": assistant_reasoning_content} if assistant_reasoning_content else {},
+                        merge=True,
+                    )
+                    self._update_working_message_payload(
+                        working_messages,
+                        assistant_message_id,
+                        {"reasoning_content": assistant_reasoning_content} if assistant_reasoning_content else {},
+                    )
                 for item in stream_done.get("tool_calls") or []:
                     request = ToolCallRequest(
                         id=item.get("id") or f"tool-use-{len(tool_requests) + 1}",
@@ -1092,9 +1154,16 @@ class QueryLoop:
                         "message_text": str(event.get("message_text") or "模型服务暂时不可用，正在自动重试。"),
                         "error_type": str(event.get("error_type") or "").strip() or None,
                     }
-                )
+                    )
             elif event_type == "error":
-                raise RuntimeError(str(event.get("user_message") or event.get("error") or "Streaming failed"))
+                error_event = dict(event or {})
+                error_event["type"] = "error"
+                if assistant_content and not error_event.get("accumulated"):
+                    error_event["accumulated"] = assistant_content
+                if assistant_reasoning_content and not error_event.get("reasoning_content"):
+                    error_event["reasoning_content"] = assistant_reasoning_content
+                await self._emit_event(error_event)
+                raise RuntimeError(self._format_stream_error_for_exception(error_event))
         if executor is not None:
             async for update in executor.get_remaining_updates():
                 tool_use_context = self._consume_executor_update(
@@ -1110,6 +1179,7 @@ class QueryLoop:
         model_response = self._normalize_model_response(
             {
                 "content": assistant_content,
+                "reasoning_content": assistant_reasoning_content,
                 "tool_calls": [{"id": request.id, "name": request.name, "input": request.input} for request in tool_requests],
                 "stop_reason": (stream_done or {}).get("stop_reason") or RuntimeStopReason.COMPLETED.value,
                 "recoverable_error_kind": (stream_done or {}).get("recoverable_error_kind"),
@@ -1186,6 +1256,14 @@ class QueryLoop:
             "tool_uses_appended": bool(tool_requests and assistant_message_id is not None),
             "legacy_text_tool_calls": legacy_text_tool_calls,
         }
+
+    @staticmethod
+    def _format_stream_error_for_exception(event: dict[str, Any]) -> str:
+        user_message = str((event or {}).get("user_message") or "").strip()
+        raw_error = str((event or {}).get("error") or "").strip()
+        if user_message and raw_error and raw_error != user_message:
+            return f"{user_message} 原始错误：{raw_error}"
+        return user_message or raw_error or "Streaming failed"
 
     def _consume_executor_update(
         self,
@@ -1264,6 +1342,8 @@ class QueryLoop:
                 return RuntimeTerminalAction.FINALIZE_TRIAGE_BATCH
             if tool_name == "FinalizeTriage":
                 return RuntimeTerminalAction.FINALIZE_TRIAGE
+            if tool_name == "FinalizeVulnerabilityReports":
+                return RuntimeTerminalAction.FINALIZE_VULNERABILITY_REPORTS
         return RuntimeTerminalAction.FINALIZE_FINDING
 
     def _should_issue_terminal_action_nudge(
@@ -1308,10 +1388,18 @@ class QueryLoop:
             return False
         return any(pattern.search(text) for pattern in cls._CONTINUE_INTENT_PATTERNS)
 
-    def _append_streaming_assistant_message(self, *, session_id: str, working_messages: list[TranscriptItem], content: str) -> str:
-        assistant_item = TranscriptItem(role=RuntimeMessageRole.ASSISTANT, content=content)
+    def _append_streaming_assistant_message(
+        self,
+        *,
+        session_id: str,
+        working_messages: list[TranscriptItem],
+        content: str,
+        reasoning_content: str = "",
+    ) -> str:
+        payload = {"reasoning_content": reasoning_content} if reasoning_content else {}
+        assistant_item = TranscriptItem(role=RuntimeMessageRole.ASSISTANT, content=content, payload=payload)
         message_id = self._session_store.append_message(session_id, assistant_item)
-        assistant_item.payload = {"message_id": message_id}
+        assistant_item.payload = {**payload, "message_id": message_id}
         working_messages.append(assistant_item)
         return message_id
 
@@ -1320,6 +1408,13 @@ class QueryLoop:
         for item in reversed(working_messages):
             if item.role is RuntimeMessageRole.ASSISTANT and item.payload.get("message_id") == message_id:
                 item.content = content
+                return
+
+    @staticmethod
+    def _update_working_message_payload(working_messages: list[TranscriptItem], message_id: str, payload: dict[str, Any]) -> None:
+        for item in reversed(working_messages):
+            if item.role is RuntimeMessageRole.ASSISTANT and item.payload.get("message_id") == message_id:
+                item.payload.update(payload)
                 return
 
     def _append_tool_use_message(self, *, session_id: str, working_messages: list[TranscriptItem], request: ToolCallRequest) -> None:

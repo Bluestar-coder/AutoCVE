@@ -20,7 +20,7 @@ from uuid import uuid4
 from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, Query
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import case
+from sqlalchemy import case, func
 from sqlalchemy.future import select
 from sqlalchemy.orm import selectinload
 from pydantic import BaseModel, Field
@@ -33,7 +33,7 @@ from app.models.agent_task import (
     AgentTaskStatus, AgentTaskPhase, AgentEventType,
     VulnerabilitySeverity, FindingStatus,
 )
-from app.models.audit_session import AuditSession, AuditSessionMessage
+from app.models.audit_session import AuditSession, AuditSessionMessage, AuditSessionTurn, AuditToolCall
 from app.services.finding_runtime.config import FindingRuntimeStack, coerce_finding_runtime_stack
 from app.services.finding_runtime.final_finding_contract import has_meaningful_poc, is_placeholder_finding
 from app.models.project import Project
@@ -50,9 +50,8 @@ from app.core.encryption import decrypt_sensitive_data
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
-# Temporarily disable automatic managed-report post-processing after findings are persisted.
-# Manual report-generation entry points can still invoke the report pipeline explicitly.
-AUTO_MANAGED_REPORT_POSTPROCESSING_ENABLED = False
+# Automatically generate managed-vulnerability reports after finalized findings are imported.
+AUTO_MANAGED_REPORT_POSTPROCESSING_ENABLED = True
 
 # Running task registry kept for cancellation and legacy task lookups.
 _running_tasks: Dict[str, Any] = {}
@@ -567,6 +566,37 @@ async def _load_runtime_session_ids(db: AsyncSession, task_ids: List[str]) -> Di
     return mapping
 
 
+async def _load_runtime_task_stats(db: AsyncSession, task_ids: List[str]) -> Dict[str, Dict[str, int]]:
+    if not task_ids:
+        return {}
+
+    stats: Dict[str, Dict[str, int]] = {
+        str(task_id): {"total_iterations": 0, "tool_calls_count": 0}
+        for task_id in task_ids
+        if task_id
+    }
+    turn_rows = await db.execute(
+        select(AuditSession.task_id, func.count(AuditSessionTurn.id))
+        .join(AuditSessionTurn, AuditSessionTurn.session_id == AuditSession.id)
+        .where(AuditSession.task_id.in_(task_ids))
+        .group_by(AuditSession.task_id)
+    )
+    for task_id, count in turn_rows.all():
+        if task_id:
+            stats.setdefault(str(task_id), {"total_iterations": 0, "tool_calls_count": 0})["total_iterations"] = int(count or 0)
+
+    tool_rows = await db.execute(
+        select(AuditSession.task_id, func.count(AuditToolCall.id))
+        .join(AuditToolCall, AuditToolCall.session_id == AuditSession.id)
+        .where(AuditSession.task_id.in_(task_ids))
+        .group_by(AuditSession.task_id)
+    )
+    for task_id, count in tool_rows.all():
+        if task_id:
+            stats.setdefault(str(task_id), {"total_iterations": 0, "tool_calls_count": 0})["tool_calls_count"] = int(count or 0)
+    return stats
+
+
 def _is_verification_enabled(workflow_config: Optional[Dict[str, Any]]) -> bool:
     if not isinstance(workflow_config, dict):
         return False
@@ -637,6 +667,95 @@ def _managed_reports_completed(managed_vulnerability: Any) -> bool:
             return False
     return True
 
+
+def _managed_report_slug(managed_vulnerability: Any) -> str:
+    raw = str(getattr(managed_vulnerability, "vulnerability_name", "") or getattr(managed_vulnerability, "id", "") or "vulnerability")
+    slug = re.sub(r"[^a-zA-Z0-9._-]+", "_", raw.strip().lower()).strip("._-")
+    return slug or "vulnerability"
+
+
+def _activity_preview(value: Any, *, limit: int = 4000) -> str:
+    text = str(value or "").strip()
+    if len(text) <= limit:
+        return text
+    return f"{text[:limit]}\n... (truncated, {len(text)} chars total)"
+
+
+async def _latest_audit_session_message_sequence(db: AsyncSession, session_id: str) -> int:
+    result = await db.execute(
+        select(func.max(AuditSessionMessage.sequence))
+        .where(AuditSessionMessage.session_id == session_id)
+    )
+    value = result.scalar_one_or_none()
+    return int(value or 0)
+
+
+async def _emit_managed_report_transcript_activity(
+    db: AsyncSession,
+    *,
+    session_id: str,
+    after_sequence: int,
+    event_emitter: Any | None,
+) -> None:
+    if event_emitter is None:
+        return
+
+    result = await db.execute(
+        select(AuditSessionMessage)
+        .where(AuditSessionMessage.session_id == session_id)
+        .where(AuditSessionMessage.sequence > after_sequence)
+        .order_by(AuditSessionMessage.sequence)
+    )
+    messages = list(result.scalars().all())
+    for message in messages:
+        metadata = dict(message.message_metadata or {})
+        payload = dict(message.payload or {})
+        role = str(message.role or "")
+        name = str(message.name or "")
+        event_metadata = {
+            "audit_session_id": session_id,
+            "audit_message_id": message.id,
+            "audit_message_sequence": message.sequence,
+            "kind": metadata.get("kind") or "managed_report_transcript",
+        }
+        if role == "user" and name == "managed_report_generator":
+            await event_emitter.emit_info(
+                "Managed report generation prompt:\n" + _activity_preview(message.content),
+                metadata=event_metadata,
+            )
+            continue
+        if role == "assistant":
+            content = _activity_preview(message.content)
+            if not content:
+                content = "Model response contained no text; it proceeded via tool call or runtime control message."
+            await event_emitter.emit_info(
+                "Managed report model response:\n" + content,
+                metadata=event_metadata,
+            )
+            continue
+        if role == "tool_use":
+            tool_name = name or str(payload.get("tool_name") or "unknown")
+            tool_input = payload.get("input") if isinstance(payload.get("input"), dict) else {}
+            await event_emitter.emit_tool_call(
+                tool_name,
+                tool_input,
+                message=f"Managed report tool call: {tool_name}",
+            )
+            continue
+        if role == "tool_result":
+            tool_name = name or str(payload.get("tool_name") or "unknown")
+            tool_output = payload.get("output")
+            if not isinstance(tool_output, dict):
+                tool_output = {"result": _activity_preview(message.content)}
+            duration_ms = int((message.message_metadata or {}).get("duration_ms") or 0)
+            await event_emitter.emit_tool_result(
+                tool_name,
+                tool_output,
+                duration_ms,
+                message=f"Managed report tool result: {_activity_preview(message.content, limit=500)}",
+            )
+
+
 async def _generate_managed_report_bundle_from_session(
     db: AsyncSession,
     *,
@@ -646,31 +765,47 @@ async def _generate_managed_report_bundle_from_session(
     managed_vulnerability: Any,
     report_service: Any,
 ):
-    del finding
-    prompt = report_service.build_generation_prompt(vulnerability=managed_vulnerability)
-
     if session.runtime_stack == FindingRuntimeStack.RUNTIME.value:
         from app.api.v1.endpoints.audit_sessions import _build_runtime_follow_up_context
 
-        bridge, sandbox_manager, model_name, max_turns = await _build_runtime_follow_up_context(session=session, db=db)
+        bridge, sandbox_manager, model_name, _max_turns = await _build_runtime_follow_up_context(session=session, db=db)
+        finding_id = str(getattr(finding, "id", "") or getattr(managed_vulnerability, "finding_id", "") or "").strip()
+        report_slug = _managed_report_slug(managed_vulnerability)
+        bridge.prepare_report_generation_continuation(
+            session_id=session.id,
+            system_prompt=report_service.build_generation_system_prompt(),
+            context_message=report_service.build_generation_context_message(
+                vulnerability=managed_vulnerability,
+                finding_id=finding_id,
+                report_slug=report_slug,
+            ),
+            metadata={
+                "kind": "internal_managed_report_request",
+                "finding_id": finding_id,
+                "managed_vulnerability_id": getattr(managed_vulnerability, "id", None),
+                "report_slug": report_slug,
+            },
+        )
         try:
-            continuation = await bridge.continue_session_until_payload(
+            continuation = await bridge.continue_session_until_report_payload(
                 session_id=session.id,
                 model_name=model_name,
-                max_turns=max_turns,
+                max_turns=None,
                 payload_extractor=report_service.extract_generation_payload_from_snapshot,
-                finalizer_prompts=report_service.build_generation_finalizer_prompts(),
+                finalizer_prompts=[],
+                terminal_action_nudge_message=report_service.build_generation_terminal_nudge(),
             )
             bundle = continuation.get("final_payload")
             if bundle is None:
                 raise ValueError("Runtime report continuation did not return a report bundle")
-            return bundle
+            return report_service.coerce_generation_result(bundle)
         finally:
             try:
                 await sandbox_manager.cleanup()
             except Exception:
                 logger.debug("Managed-report runtime sandbox cleanup skipped", exc_info=True)
 
+    prompt = report_service.build_generation_prompt(vulnerability=managed_vulnerability)
     from app.services.llm.service import LLMService
 
     user_config = await _get_user_config(db, task.created_by)
@@ -689,9 +824,9 @@ async def _auto_generate_managed_vulnerability_reports(
     task: AgentTask,
     workflow_config: Optional[Dict[str, Any]],
     findings: Optional[List[AgentFinding]] = None,
+    event_emitter: Any | None = None,
 ) -> Dict[str, int]:
-    if _is_verification_enabled(workflow_config):
-        return {'generated': 0, 'failed': 0, 'skipped': 1}
+    del workflow_config
 
     persisted_findings = list(findings or await _load_task_findings(db, task.id))
     if not persisted_findings:
@@ -712,21 +847,33 @@ async def _auto_generate_managed_vulnerability_reports(
             continue
 
         prompt = report_service.build_generation_prompt(vulnerability=managed)
-        if session is not None:
-            await _append_internal_audit_session_message(
-                db,
-                session_id=session.id,
-                role='user',
-                content=prompt,
-                name='managed_report_generator',
-                metadata={
-                    'kind': 'internal_managed_report_request',
-                    'finding_id': finding.id,
-                    'managed_vulnerability_id': managed.id,
-                },
+        if event_emitter is not None:
+            await event_emitter.emit_info(
+                f"Starting managed vulnerability report generation for {managed.vulnerability_name}"
             )
+        activity_after_sequence = 0
+        if session is not None and event_emitter is not None:
+            activity_after_sequence = await _latest_audit_session_message_sequence(db, session.id)
 
         try:
+            if session is not None and session.runtime_stack == FindingRuntimeStack.RUNTIME.value:
+                # Runtime report generation writes its own committed transcript message
+                # through AuditSessionStore before the continuation starts.
+                pass
+            elif session is not None:
+                await _append_internal_audit_session_message(
+                    db,
+                    session_id=session.id,
+                    role='user',
+                    content=prompt,
+                    name='managed_report_generator',
+                    metadata={
+                        'kind': 'internal_managed_report_request',
+                        'finding_id': finding.id,
+                        'managed_vulnerability_id': managed.id,
+                        'report_slug': _managed_report_slug(managed),
+                    },
+                )
             if session is not None:
                 generated_bundle = await _generate_managed_report_bundle_from_session(
                     db,
@@ -747,7 +894,32 @@ async def _auto_generate_managed_vulnerability_reports(
                 )
                 raw_content = str((response or {}).get("content") or "").strip()
                 generated_bundle = report_service.parse_generation_payload(raw_content)
+            generated_bundle = report_service.coerce_generation_result(generated_bundle)
             report_service.apply_generated_reports(vulnerability=managed, result=generated_bundle)
+            if session is not None:
+                await _append_internal_audit_session_message(
+                    db,
+                    session_id=session.id,
+                    role='assistant',
+                    content='Managed vulnerability reports finalized: English, Chinese, and CVE helper Markdown were generated.',
+                    name='managed_report_generator',
+                    metadata={
+                        'kind': 'internal_managed_report_complete',
+                        'finding_id': finding.id,
+                        'managed_vulnerability_id': managed.id,
+                        'report_slug': _managed_report_slug(managed),
+                    },
+                )
+                await _emit_managed_report_transcript_activity(
+                    db,
+                    session_id=session.id,
+                    after_sequence=activity_after_sequence,
+                    event_emitter=event_emitter,
+                )
+            if event_emitter is not None:
+                await event_emitter.emit_info(
+                    f"Generated EN/ZH/CVE managed vulnerability reports for {managed.vulnerability_name}"
+                )
             stats['generated'] += 1
         except Exception as exc:
             managed.report_generation_status = 'failed'
@@ -766,9 +938,63 @@ async def _auto_generate_managed_vulnerability_reports(
                         'managed_vulnerability_id': managed.id,
                     },
                 )
+                await _emit_managed_report_transcript_activity(
+                    db,
+                    session_id=session.id,
+                    after_sequence=activity_after_sequence,
+                    event_emitter=event_emitter,
+                )
             stats['failed'] += 1
             logger.exception('Managed vulnerability report generation failed for finding %s', finding.id)
+            if event_emitter is not None:
+                await event_emitter.emit_info(
+                    f"Managed vulnerability report generation failed for {managed.vulnerability_name}: {exc}"
+                )
         await db.flush()
+    return stats
+
+
+async def _sync_managed_vulnerability_records(
+    db: AsyncSession,
+    *,
+    task: AgentTask,
+    findings: Optional[List[AgentFinding]] = None,
+) -> Dict[str, int]:
+    persisted_findings = list(findings or await _load_task_findings(db, task.id))
+    if not persisted_findings:
+        return {'created': 0, 'existing': 0, 'failed': 0}
+
+    from app.models.managed_vulnerability import ManagedVulnerability
+    from app.services.managed_vulnerability_service import ManagedVulnerabilityService
+
+    finding_ids = [
+        str(getattr(finding, 'id', '') or '').strip()
+        for finding in persisted_findings
+        if str(getattr(finding, 'id', '') or '').strip()
+    ]
+    existing_ids: set[str] = set()
+    if finding_ids:
+        existing_result = await db.execute(
+            select(ManagedVulnerability.finding_id).where(ManagedVulnerability.finding_id.in_(finding_ids))
+        )
+        existing_ids = {str(item) for item in existing_result.scalars().all()}
+
+    managed_service = ManagedVulnerabilityService(db)
+    stats = {'created': 0, 'existing': 0, 'failed': 0}
+    for finding in persisted_findings:
+        finding_id = str(getattr(finding, 'id', '') or '').strip()
+        try:
+            await managed_service.create_from_finding(task=task, finding=finding)
+            if finding_id in existing_ids:
+                stats['existing'] += 1
+            else:
+                stats['created'] += 1
+                if finding_id:
+                    existing_ids.add(finding_id)
+        except Exception:
+            stats['failed'] += 1
+            logger.exception('Managed vulnerability record sync failed for finding %s', finding_id or '<unknown>')
+    await db.flush()
     return stats
 
 
@@ -1049,6 +1275,11 @@ async def _execute_agent_task(task_id: str):
                 task.total_iterations = getattr(orchestrator, "iteration_count", task.total_iterations or 0)
                 task.tool_calls_count = getattr(orchestrator, "tool_call_count", task.tool_calls_count or 0)
                 task.tokens_used = getattr(orchestrator, "total_tokens_used", task.tokens_used or 0)
+                runtime_stats = (await _load_runtime_task_stats(db, [task_id])).get(str(task_id), {})
+                if runtime_stats.get("total_iterations"):
+                    task.total_iterations = max(int(task.total_iterations or 0), int(runtime_stats["total_iterations"]))
+                if runtime_stats.get("tool_calls_count"):
+                    task.tool_calls_count = max(int(task.tool_calls_count or 0), int(runtime_stats["tool_calls_count"]))
                 task.analyzed_files = task.total_files
                 task.duration_ms = duration_ms
                 saved_findings = await _load_task_findings(db, task_id)
@@ -1060,12 +1291,18 @@ async def _execute_agent_task(task_id: str):
                     handoff=getattr(result, "handoff", None),
                 )
                 task.agent_config = runtime_agent_config
+                managed_record_stats = await _sync_managed_vulnerability_records(
+                    db,
+                    task=task,
+                    findings=saved_findings,
+                )
                 if AUTO_MANAGED_REPORT_POSTPROCESSING_ENABLED:
                     managed_report_stats = await _auto_generate_managed_vulnerability_reports(
                         db,
                         task=task,
                         workflow_config=workflow_config,
                         findings=saved_findings,
+                        event_emitter=event_emitter,
                     )
                 else:
                     managed_report_stats = _disabled_managed_report_stats(saved_findings)
@@ -1082,6 +1319,14 @@ async def _execute_agent_task(task_id: str):
                     await event_emitter.emit_info(
                         f"Managed vulnerability report generation failed for {managed_report_stats['failed']} findings"
                     )
+                if managed_record_stats.get("created"):
+                    await event_emitter.emit_info(
+                        f"Imported {managed_record_stats['created']} findings into vulnerability management"
+                    )
+                elif managed_record_stats.get("failed"):
+                    await event_emitter.emit_info(
+                        f"Managed vulnerability import failed for {managed_record_stats['failed']} findings"
+                    )
                 await event_emitter.emit_info("Final vulnerability report generated")
                 await event_emitter.emit_phase_complete("reporting", f"Audit completed with {saved_count} findings")
             else:
@@ -1089,6 +1334,11 @@ async def _execute_agent_task(task_id: str):
                 task.completed_at = datetime.now(timezone.utc)
                 task.error_message = result.error if hasattr(result, "error") else "Unknown execution error"
                 task.duration_ms = duration_ms
+                runtime_stats = (await _load_runtime_task_stats(db, [task_id])).get(str(task_id), {})
+                if runtime_stats.get("total_iterations"):
+                    task.total_iterations = max(int(task.total_iterations or 0), int(runtime_stats["total_iterations"]))
+                if runtime_stats.get("tool_calls_count"):
+                    task.tool_calls_count = max(int(task.tool_calls_count or 0), int(runtime_stats["tool_calls_count"]))
                 await db.commit()
                 await event_emitter.emit_error(task.error_message or "Task failed")
 
@@ -2145,8 +2395,14 @@ async def list_agent_tasks(
     result = await db.execute(query.order_by(AgentTask.created_at.desc()).offset(skip).limit(limit))
     tasks = result.scalars().all()
     runtime_session_ids = await _load_runtime_session_ids(db, [task.id for task in tasks])
+    runtime_stats = await _load_runtime_task_stats(db, [task.id for task in tasks])
     for task in tasks:
         runtime_result = _get_task_finding_runtime_result(task)
+        task_runtime_stats = runtime_stats.get(str(task.id), {})
+        if task_runtime_stats.get("total_iterations"):
+            setattr(task, "total_iterations", max(int(task.total_iterations or 0), int(task_runtime_stats["total_iterations"])))
+        if task_runtime_stats.get("tool_calls_count"):
+            setattr(task, "tool_calls_count", max(int(task.tool_calls_count or 0), int(task_runtime_stats["tool_calls_count"])))
         setattr(task, "runtime_session_id", runtime_session_ids.get(task.id))
         setattr(task, "finding_runtime_stack", _resolve_task_runtime_stack(task.agent_config))
         setattr(task, "finding_outcome", runtime_result["finding_outcome"])
@@ -2260,6 +2516,12 @@ async def get_agent_task(
                 tokens_used += sub_stats.get("tokens_used", 0)
 
     runtime_session_ids = await _load_runtime_session_ids(db, [task.id])
+    runtime_stats = await _load_runtime_task_stats(db, [task.id])
+    task_runtime_stats = runtime_stats.get(str(task.id), {})
+    if task_runtime_stats.get("total_iterations"):
+        total_iterations = max(total_iterations, int(task_runtime_stats["total_iterations"]))
+    if task_runtime_stats.get("tool_calls_count"):
+        tool_calls_count = max(tool_calls_count, int(task_runtime_stats["tool_calls_count"]))
     runtime_result = _get_task_finding_runtime_result(task)
 
     response_data = {

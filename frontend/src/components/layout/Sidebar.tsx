@@ -2,7 +2,6 @@
 import type { ReactNode } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import {
-  Activity,
   BookOpen,
   Bot,
   ChevronLeft,
@@ -12,14 +11,10 @@ import {
   LayoutDashboard,
   ListTodo,
   Menu,
-  MessageSquare,
   Settings,
-  Shield,
   ShieldAlert,
-  Trash2,
   UserCircle,
   X,
-  Zap,
 } from 'lucide-react';
 
 import routes from '@/app/routes';
@@ -30,16 +25,11 @@ const routeIcons: Record<string, ReactNode> = {
   '/': <Bot className="h-[18px] w-[18px]" />,
   '/dashboard': <LayoutDashboard className="h-[18px] w-[18px]" />,
   '/projects': <FolderGit2 className="h-[18px] w-[18px]" />,
-  '/agent-direct-audit': <Zap className="h-[18px] w-[18px]" />,
   '/audit-tasks': <ListTodo className="h-[18px] w-[18px]" />,
-  '/audit-rules': <Shield className="h-[18px] w-[18px]" />,
-  '/prompts': <MessageSquare className="h-[18px] w-[18px]" />,
   '/skills': <BookOpen className="h-[18px] w-[18px]" />,
   '/report-templates': <FileText className="h-[18px] w-[18px]" />,
   '/vulnerabilities': <ShieldAlert className="h-[18px] w-[18px]" />,
-  '/flow-debugger': <Activity className="h-[18px] w-[18px]" />,
   '/admin': <Settings className="h-[18px] w-[18px]" />,
-  '/recycle-bin': <Trash2 className="h-[18px] w-[18px]" />,
 };
 
 interface SidebarProps {
@@ -89,7 +79,7 @@ export default function Sidebar({ collapsed, setCollapsed }: SidebarProps) {
               <img src="/auditai_icon.svg" alt="AuditAI" className="h-12 w-12 object-contain" />
               {!collapsed && (
                 <div className="min-w-0">
-                  <div className="text-[1.35rem] font-semibold tracking-[-0.03em] text-slate-900">AuditAI</div>
+                  <div className="text-[1.35rem] font-semibold tracking-[-0.03em] text-slate-900">AI Audit</div>
                 </div>
               )}
             </Link>

@@ -122,6 +122,16 @@ class AuditSessionStore:
             message.content = content
             db.commit()
 
+    def update_message_payload(self, message_id: str, *, payload: dict, merge: bool = True) -> None:
+        with self._session_factory() as db:
+            message = db.get(AuditSessionMessage, message_id)
+            if message is None:
+                raise LookupError(f"Unknown audit session message: {message_id}")
+            existing = dict(message.payload or {}) if merge else {}
+            existing.update(dict(payload or {}))
+            message.payload = existing
+            db.commit()
+
     def open_turn(self, session_id: str, *, model_name: str | None = None) -> str:
         with self._session_factory() as db:
             sequence = self._next_sequence(db, AuditSessionTurn, AuditSessionTurn.session_id, session_id)

@@ -43,8 +43,12 @@ class InvokeSkillInput(BaseModel):
 class RuntimeSkillTool(RuntimeTool):
     name = "Skill"
     description = (
-        "从本地技能库加载匹配的 SKILL.md 正文或具体技能资源。"
-        "当技能简报要求打开主审计技能或引用指南时使用。"
+        "Load instructions and resources from the local skill library. "
+        "When a skill matches the user's task or is explicitly named in the prompt, invoking this tool is a blocking requirement: "
+        "you must call Skill(action=\"body\") for the relevant skill before producing any other task-specific answer, audit, or plan. "
+        "After reading the SKILL.md body, follow its startup protocol and mandatory reads by calling "
+        "Skill(action=\"read_resource\", resource_name=...) for each referenced checklist, coverage matrix, guide, example, or script that it requires. "
+        "Use list_resources only for discovery; do not treat discovery metadata as a substitute for reading the required skill body and resources."
     )
     input_model = InvokeSkillInput
 

@@ -64,6 +64,8 @@ class AgentModelConfigSchema(BaseModel):
     llmTimeout: Optional[int] = None
     llmTemperature: Optional[float] = None
     llmMaxTokens: Optional[int] = None
+    endpointProtocol: Optional[str] = None
+    toolMessageFormat: Optional[str] = None
     maxIterations: Optional[int] = None
     env: Dict[str, str] = Field(default_factory=dict)
     alwaysThinkingEnabled: Optional[bool] = None
@@ -79,6 +81,8 @@ class ModelProfileSchema(BaseModel):
     llmTimeout: Optional[int] = None
     llmTemperature: Optional[float] = None
     llmMaxTokens: Optional[int] = None
+    endpointProtocol: Optional[str] = None
+    toolMessageFormat: Optional[str] = None
     env: Dict[str, str] = Field(default_factory=dict)
 
 
@@ -90,6 +94,8 @@ class LLMConfigSchema(BaseModel):
     llmTimeout: Optional[int] = None
     llmTemperature: Optional[float] = None
     llmMaxTokens: Optional[int] = None
+    endpointProtocol: Optional[str] = None
+    toolMessageFormat: Optional[str] = None
     llmCustomHeaders: Optional[str] = None
     llmFirstTokenTimeout: Optional[int] = None
     llmStreamTimeout: Optional[int] = None
@@ -142,6 +148,8 @@ class LLMConnectionTestRequest(BaseModel):
     apiKey: Optional[str] = None
     model: Optional[str] = None
     baseUrl: Optional[str] = None
+    endpointProtocol: Optional[str] = None
+    toolMessageFormat: Optional[str] = None
     prompt: str = "请只回复：模型连接成功。"
 
 
@@ -517,6 +525,10 @@ async def test_llm_connection(
         llm_config["llmModel"] = payload.model
     if payload.baseUrl is not None:
         llm_config["llmBaseUrl"] = payload.baseUrl
+    if payload.endpointProtocol is not None:
+        llm_config["endpointProtocol"] = payload.endpointProtocol
+    if payload.toolMessageFormat is not None:
+        llm_config["toolMessageFormat"] = payload.toolMessageFormat
 
     try:
         llm_service = LLMService(user_config=test_user_config)

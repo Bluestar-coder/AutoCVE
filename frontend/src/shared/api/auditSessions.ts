@@ -159,8 +159,9 @@ export async function postAuditSessionMessage(
   sessionId: string,
   content: string,
   mode: AuditSessionMessageMode = "chat",
+  selectedSkillRefs: string[] = [],
 ): Promise<AuditSessionMessageMutationResponse> {
-  const response = await apiClient.post(`/audit-sessions/${sessionId}/messages`, { content, mode });
+  const response = await apiClient.post(`/audit-sessions/${sessionId}/messages`, { content, mode, selected_skill_refs: selectedSkillRefs });
   return response.data;
 }
 
@@ -195,6 +196,7 @@ export async function streamAuditSessionMessage(
   sessionId: string,
   content: string,
   mode: AuditSessionMessageMode = "chat",
+  selectedSkillRefs: string[] = [],
   handlers: {
     onEvent?: (event: AuditSessionStreamEvent) => void;
     signal?: AbortSignal;
@@ -212,7 +214,7 @@ export async function streamAuditSessionMessage(
       Accept: "text/event-stream",
       "Content-Type": "application/json",
     },
-    body: JSON.stringify({ content, mode }),
+    body: JSON.stringify({ content, mode, selected_skill_refs: selectedSkillRefs }),
     signal: handlers.signal,
   });
 

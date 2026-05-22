@@ -67,8 +67,33 @@ function getStatusIcon(title: string) {
   return null;
 }
 
+const AGENT_TONES = {
+  finding: {
+    card: "border-emerald-500/35 dark:border-emerald-500/25 !bg-emerald-50 dark:!bg-emerald-950/20",
+    badge: "border-emerald-500/45 text-emerald-700 bg-emerald-500/10 dark:text-emerald-300",
+    typeLabel: "bg-emerald-500/20 text-emerald-700 dark:text-emerald-300 border-emerald-500/35",
+    rail: "bg-emerald-500/60",
+    cursor: "bg-emerald-500",
+  },
+  recon: {
+    card: "border-sky-500/35 dark:border-sky-500/25 !bg-sky-50 dark:!bg-sky-950/20",
+    badge: "border-sky-500/45 text-sky-700 bg-sky-500/10 dark:text-sky-300",
+    typeLabel: "bg-sky-500/20 text-sky-700 dark:text-sky-300 border-sky-500/35",
+    rail: "bg-sky-500/60",
+    cursor: "bg-sky-500",
+  },
+};
+
+function getAgentTone(agentName?: string) {
+  const normalized = (agentName || "").toLowerCase();
+  if (normalized.includes("finding")) return AGENT_TONES.finding;
+  if (normalized.includes("recon")) return AGENT_TONES.recon;
+  return null;
+}
+
 export const LogEntry = memo(function LogEntry({ item, isExpanded, onToggle }: LogEntryProps) {
   const config = LOG_TYPE_CONFIG[item.type] || LOG_TYPE_CONFIG.info;
+  const agentTone = getAgentTone(item.agentName);
   const isThinking = item.type === 'thinking';
   const isTool = item.type === 'tool';
   const isFinding = item.type === 'finding';
@@ -101,6 +126,7 @@ export const LogEntry = memo(function LogEntry({ item, isExpanded, onToggle }: L
         ${isDispatch ? 'border-sky-500/30 dark:border-sky-500/20 !bg-sky-50 dark:!bg-sky-950/20' : ''}
         ${isThinking ? '!bg-violet-50 dark:!bg-violet-950/20 border-violet-500/30 dark:border-violet-500/20' : ''}
         ${isTool ? '!bg-amber-50 dark:!bg-amber-950/20 border-amber-500/30 dark:border-amber-500/20' : ''}
+        ${agentTone?.card || ''}
       `}>
 
         {/* Content */}
@@ -124,6 +150,7 @@ export const LogEntry = memo(function LogEntry({ item, isExpanded, onToggle }: L
               ${isDispatch ? 'bg-sky-500/20 text-sky-600 dark:text-sky-300 border-sky-500/30' : ''}
               ${item.type === 'phase' ? 'bg-teal-500/20 text-teal-600 dark:text-teal-300 border-teal-500/30' : ''}
               ${item.type === 'user' ? 'bg-indigo-500/20 text-indigo-600 dark:text-indigo-300 border-indigo-500/30' : ''}
+              ${isThinking ? agentTone?.typeLabel || '' : ''}
               flex-shrink-0
             `}>
               {LOG_TYPE_LABELS[item.type] || 'LOG'}
@@ -149,7 +176,7 @@ export const LogEntry = memo(function LogEntry({ item, isExpanded, onToggle }: L
 
             {/* Streaming cursor */}
             {item.isStreaming && (
-              <span className="w-2 h-5 bg-violet-500 rounded-sm flex-shrink-0" />
+              <span className={`w-2 h-5 rounded-sm flex-shrink-0 ${agentTone?.cursor || 'bg-violet-500'}`} />
             )}
 
             {/* Tool status */}
@@ -171,7 +198,7 @@ export const LogEntry = memo(function LogEntry({ item, isExpanded, onToggle }: L
             {item.agentName && (
               <Badge
                 variant="outline"
-                className="h-6 px-2.5 text-xs uppercase tracking-wider border-primary/40 text-primary bg-primary/10 flex-shrink-0 font-semibold"
+                className={`h-6 px-2.5 text-xs uppercase tracking-wider flex-shrink-0 font-semibold ${agentTone?.badge || 'border-primary/40 text-primary bg-primary/10'}`}
               >
                 {item.agentName}
               </Badge>
@@ -217,7 +244,7 @@ export const LogEntry = memo(function LogEntry({ item, isExpanded, onToggle }: L
           {/* Thinking content - always visible */}
           {isThinking && item.content && (
             <div className="mt-3 relative">
-              <div className="absolute left-0 top-0 bottom-0 w-0.5 bg-violet-500/50 rounded-full" />
+              <div className={`absolute left-0 top-0 bottom-0 w-0.5 rounded-full ${agentTone?.rail || 'bg-violet-500/50'}`} />
               <div className="pl-4 text-sm text-foreground/90 whitespace-pre-wrap break-words">
                 {item.content}
               </div>

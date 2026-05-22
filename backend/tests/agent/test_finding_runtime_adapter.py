@@ -35,6 +35,9 @@ class FakeSkillCatalog:
                         "name": "Code Audit Finding",
                         "description": "primary skill",
                         "source_type": "bundled",
+                        "paths": {
+                            "skill_file_path": "/app/skill_library/code-audit-finding/SKILL.md",
+                        },
                     }
                 ],
                 "matched_skills": [
@@ -44,6 +47,9 @@ class FakeSkillCatalog:
                         "name": "Code Audit Finding",
                         "description": "primary skill",
                         "source_type": "bundled",
+                        "paths": {
+                            "skill_file_path": "/app/skill_library/code-audit-finding/SKILL.md",
+                        },
                     }
                 ],
                 "prompt": "skills prompt",
@@ -51,6 +57,29 @@ class FakeSkillCatalog:
                 "route_plan": {"primary_skill": "code-audit-finding"},
             },
         )()
+
+
+class FakeSkillService:
+    @staticmethod
+    def get_skill_entry(user_id, skill_ref, agent_type=None):
+        return None
+
+    @staticmethod
+    async def get_skill_body(user_id, skill_ref, agent_type=None):
+        return {
+            "skill": "Code Audit Finding",
+            "slug": skill_ref,
+            "skill_file": "/app/skill_library/code-audit-finding/SKILL.md",
+            "content": "FULL SKILL BODY\nRequired startup protocol.",
+        }
+
+    @staticmethod
+    async def list_skill_resources(user_id, skill_ref, resource_name="", agent_type=None):
+        return {"items": []}
+
+    @staticmethod
+    async def get_skill_resource(user_id, skill_ref, resource_name, agent_type=None):
+        return {"content": "resource"}
 
 
 class FakeMemoryManager:
@@ -121,6 +150,41 @@ def test_finding_runtime_adapter_preserves_prompt_recon_skill_route_and_memories
     assert snapshot.messages[0].content == "audit this target"
     assert result["memory_counts"] == {"instruction": 1, "recall": 1}
     assert runner.calls == [{"session_id": result["session_id"], "model_name": "gpt-test"}]
+
+
+def test_finding_runtime_adapter_injects_explicit_skill_mentions_with_audited_invocation():
+    store = build_store()
+    adapter = FindingRuntimeAdapter(
+        session_store=store,
+        runner=FakeRunner(),
+        skill_catalog=FakeSkillCatalog(),
+        memory_manager=FakeMemoryManager(),
+        skill_service=FakeSkillService(),
+    )
+
+    result = asyncio.run(
+        adapter.run(
+            project_id="project-1",
+            task_id="task-1",
+            system_prompt="Read $code-audit-finding before working.",
+            recon_payload={"repo": "demo"},
+            user_message="audit this target",
+            model_name="gpt-test",
+        )
+    )
+
+    snapshot = store.load_session_snapshot(result["session_id"])
+    invocations = store.list_skill_invocations(result["session_id"])
+
+    assert "<explicit_skill>" in snapshot.session.system_prompt
+    assert "<skill_ref>code-audit-finding</skill_ref>" in snapshot.session.system_prompt
+    assert "FULL SKILL BODY" in snapshot.session.system_prompt
+    assert "显式技能加载提醒" in snapshot.session.system_prompt
+    assert "Primary skill bootstrap" not in snapshot.session.system_prompt
+    assert len(invocations) == 1
+    assert invocations[0].skill_ref == "code-audit-finding"
+    assert invocations[0].input_payload["invocation_source"] == "explicit_mention"
+    assert invocations[0].input_payload["mention_source"] == "system"
 
 
 def test_finding_runtime_adapter_defaults_user_message_when_not_provided():

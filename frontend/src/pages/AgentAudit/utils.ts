@@ -126,6 +126,55 @@ export function cleanThinkingContent(content: string): string {
 }
 
 /**
+ * Remove backend-added agent labels before comparing log text.
+ */
+export function stripAgentLogPrefix(content: string): string {
+  return (content || "").replace(/^\s*\[(?:Finding|Recon|Analysis|Scan|Triage|Verification|Orchestrator) Agent\]\s*/i, "").trim();
+}
+
+function activityLogFingerprint(log: LogItem): string | null {
+  if (!["thinking", "info"].includes(log.type)) {
+    return null;
+  }
+
+  const text = stripAgentLogPrefix(log.content || log.title || "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+
+  if (!text) {
+    return null;
+  }
+
+  return [
+    log.type,
+    (log.agentName || "").trim().toLowerCase(),
+    text,
+  ].join("|");
+}
+
+/**
+ * Collapse duplicate Activity Log entries produced by both AgentEvent and runtime transcript streams.
+ */
+export function dedupeActivityLogs(logs: LogItem[]): LogItem[] {
+  const seen = new Set<string>();
+  const deduped: LogItem[] = [];
+
+  for (const log of logs) {
+    const fingerprint = activityLogFingerprint(log);
+    if (fingerprint && seen.has(fingerprint)) {
+      continue;
+    }
+    if (fingerprint) {
+      seen.add(fingerprint);
+    }
+    deduped.push(log);
+  }
+
+  return deduped;
+}
+
+/**
  * Truncate output string
  */
 export function truncateOutput(output: string, maxLength: number = 1000): string {

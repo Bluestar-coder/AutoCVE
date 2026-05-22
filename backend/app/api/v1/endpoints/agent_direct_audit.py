@@ -417,16 +417,23 @@ async def _ensure_direct_audit_outputs(
                 },
             )
             try:
-                continuation = await bridge.continue_session_until_payload(
+                report_continuation = getattr(
+                    bridge,
+                    "continue_session_until_report_payload",
+                    bridge.continue_session_until_payload,
+                )
+                continuation = await report_continuation(
                     session_id=session.id,
                     model_name=model_name,
-                    max_turns=max_turns,
+                    max_turns=None,
                     payload_extractor=report_service.extract_generation_payload_from_snapshot,
                     finalizer_prompts=report_service.build_generation_finalizer_prompts(),
+                    terminal_action_nudge_message=report_service.build_generation_terminal_nudge(),
                 )
                 generated_bundle = continuation.get("final_payload")
                 if generated_bundle is None:
                     raise ValueError("Runtime report continuation did not return a report bundle")
+                generated_bundle = report_service.coerce_generation_result(generated_bundle)
             except Exception:
                 generated_bundle = await _generate_managed_report_bundle_from_session(
                     db,

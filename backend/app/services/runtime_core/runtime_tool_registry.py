@@ -12,6 +12,7 @@ from app.services.agent.tools.todo_runtime_tool import TodoWriteRuntimeTool
 from app.services.finding_runtime.models import ToolExecutionPayload
 from app.services.finding_runtime.skills import RuntimeSkillTool
 from app.services.finding_runtime.tools.finalize_finding import FinalizeFindingTool
+from app.services.finding_runtime.tools.finalize_vulnerability_reports import FinalizeVulnerabilityReportsTool
 from app.services.triage_runtime.tools import (
     FinalizeTriageBatchTool,
     FinalizeTriageTool,
@@ -90,8 +91,18 @@ def _infer_project_root(agent_tools: dict[str, AgentTool]) -> str | None:
 class CanonicalReadTool(RuntimeTool):
     name = "Read"
     description = (
-        "读取项目中的单个文件，或读取少量密切相关的文件。"
-        "适合控制器、服务、配置、SQL、XML 和技能参考文件。"
+        "读取项目本地文件内容。适合查看源代码、路由、控制器、服务、模型、配置、SQL、XML、模板、"
+        "测试文件、依赖文件以及 Skill 引用文档。\n\n"
+        "用法：\n"
+        "- file_path 为相对项目根目录的文件路径。\n"
+        "- 也可以使用 file_paths 一次读取少量强相关文件，例如同一个调用链上的 route/controller/service/model。\n"
+        "- start_line 和 end_line 用于只读取已知相关片段；不确定位置时先读取完整文件或较大范围。\n"
+        "- max_lines 控制单个文件最多返回的行数，长文件建议分段读取。\n"
+        "- Read 只能读取文件，不能枚举目录；需要发现文件时先用 Glob，需要按关键字查找时用 Grep。\n\n"
+        "审计要求：\n"
+        "- 当你需要查看代码、确认实现、补齐 source/sink、验证调用链或提取代码片段时，使用 Read。\n"
+        "- 如果你说“继续查看/继续追踪/让我检查/需要读取/确认实现”，必须实际调用 Read、Grep、Glob "
+        "或其它合适工具，而不是只描述下一步计划。"
     )
     input_model = ReadToolInput
 
@@ -144,7 +155,24 @@ class CanonicalReadTool(RuntimeTool):
 
 class CanonicalGlobTool(RuntimeTool):
     name = "Glob"
-    description = "按 glob 模式列出项目目录下的文件。"
+    description = (
+        "按文件名或路径模式枚举项目文件。适合在不知道准确路径时发现路由文件、控制器、服务、配置、"
+        "测试、模板、迁移脚本、语言入口文件和特定扩展名文件。\n\n"
+        "用法：\n"
+        "- path 是相对项目根目录的搜索目录，默认 \".\"。\n"
+        "- pattern 是 glob 模式，例如 \"**/*.py\"、\"src/**/*.java\"、\"**/*Controller*\"、\"**/*.xml\"。\n"
+        "- recursive 控制是否递归子目录，默认递归。\n"
+        "- max_results 控制最多返回的文件数量，避免结果过大。\n\n"
+        "使用建议：\n"
+        "- 需要找文件名、扩展名、目录结构时使用 Glob。\n"
+        "- 找到候选文件后，用 Read 阅读内容。\n"
+        "- 需要按内容查找时使用 Grep，不要用 Glob 代替内容搜索。\n"
+        "- 如果一次 Glob 返回太多结果，缩小 path 或 pattern。\n\n"
+        "审计要求：\n"
+        "- 当你需要继续发现相关文件、扩大审计范围或定位未知文件路径时，必须调用 Glob、Grep、Read "
+        "或其它合适工具。\n"
+        "- 不要只说明“接下来查找相关文件”，必须实际调用工具。"
+    )
     input_model = GlobToolInput
 
     def __init__(self, *, list_tool: AgentTool):
@@ -176,7 +204,24 @@ class CanonicalGlobTool(RuntimeTool):
 
 class CanonicalGrepTool(RuntimeTool):
     name = "Grep"
-    description = "使用正则或关键字在代码和配置文本中搜索。"
+    description = (
+        "在项目代码和配置文本中搜索关键字或正则表达式。底层语义等价于高效代码搜索，适合追踪路由、"
+        "函数名、参数名、权限校验、危险 API、source、sink、配置项和跨文件调用关系。\n\n"
+        "用法：\n"
+        "- pattern 是要搜索的关键字或正则表达式。\n"
+        "- path 可选，用于限制搜索目录；不提供时默认从项目根目录搜索。\n"
+        "- glob 可选，用于限制文件类型或路径范围，例如 \"*.py\"、\"**/*.java\"、\"src/**/*.ts\"。\n"
+        "- case_sensitive 控制是否大小写敏感，默认不敏感。\n"
+        "- is_regex=true 时 pattern 按正则处理；普通关键字搜索保持 is_regex=false。\n"
+        "- max_results 控制最多返回的匹配数量，避免一次搜索结果过大。\n\n"
+        "使用建议：\n"
+        "- 搜索任务优先使用 Grep，不要通过 PowerShell 手写 grep/rg/findstr，除非 Grep 无法表达该查询。\n"
+        "- 已知标识符、接口路径、参数名、函数名、类名、配置 key 时，先用 Grep 定位引用，再用 Read 阅读关键文件。\n"
+        "- 追踪漏洞链时，用 Grep 查找 source 输入点、sink 调用点、鉴权/权限判断、过滤/转义函数、跨层 service/model 调用。\n\n"
+        "审计要求：\n"
+        "- 当你需要继续搜索、追踪、确认引用、查找调用链或补齐证据时，必须调用 Grep、Read、Glob 或其它合适工具。\n"
+        "- 不要只回复“我将继续搜索/继续追踪/下一步检查”，继续就必须实际发起工具调用。"
+    )
     input_model = GrepToolInput
 
     def __init__(self, *, search_tool: AgentTool):
@@ -454,7 +499,15 @@ class CanonicalWriteTool(RuntimeTool):
         )
 
 
-def build_runtime_tool_registry(*, session_store, agent_tools: dict[str, AgentTool], agent_type: str, user_id: str | None = None) -> ToolRegistry:
+def build_runtime_tool_registry(
+    *,
+    session_store,
+    agent_tools: dict[str, AgentTool],
+    agent_type: str,
+    user_id: str | None = None,
+    include_finding_finalizer: bool = True,
+    include_report_finalizer: bool = False,
+) -> ToolRegistry:
     tools: list[RuntimeTool] = []
 
     read_tool = agent_tools.get("read_file")
@@ -509,8 +562,10 @@ def build_runtime_tool_registry(*, session_store, agent_tools: dict[str, AgentTo
             user_id=user_id,
         )
     )
-    if str(agent_type or "").strip() == "finding":
+    if str(agent_type or "").strip() == "finding" and include_finding_finalizer:
         tools.append(FinalizeFindingTool())
+    if str(agent_type or "").strip() == "finding" and include_report_finalizer:
+        tools.append(FinalizeVulnerabilityReportsTool())
     if str(agent_type or "").strip() == "triage":
         tools.extend(
             [

@@ -35,14 +35,43 @@ class LLMConfig:
     top_p: float = 1.0
     frequency_penalty: float = 0
     presence_penalty: float = 0
+    endpoint_protocol: str = "openai_compatible"
+    tool_message_format: str = "auto"
     custom_headers: Dict[str, str] = field(default_factory=dict)
 
 
 @dataclass
 class LLMMessage:
     """LLM请求消息"""
-    role: str  # 'system', 'user', 'assistant'
-    content: str
+    role: str  # 'system', 'user', 'assistant', 'tool'
+    content: Any
+    name: Optional[str] = None
+    tool_calls: Optional[List[Dict[str, Any]]] = None
+    tool_call_id: Optional[str] = None
+    reasoning_content: Optional[str] = None
+
+    @classmethod
+    def from_dict(cls, item: Dict[str, Any]) -> "LLMMessage":
+        return cls(
+            role=str(item["role"]),
+            content=item.get("content"),
+            name=item.get("name"),
+            tool_calls=item.get("tool_calls"),
+            tool_call_id=item.get("tool_call_id"),
+            reasoning_content=item.get("reasoning_content"),
+        )
+
+    def to_dict(self) -> Dict[str, Any]:
+        data: Dict[str, Any] = {"role": self.role, "content": self.content}
+        if self.name is not None:
+            data["name"] = self.name
+        if self.tool_calls is not None:
+            data["tool_calls"] = self.tool_calls
+        if self.tool_call_id is not None:
+            data["tool_call_id"] = self.tool_call_id
+        if self.reasoning_content is not None:
+            data["reasoning_content"] = self.reasoning_content
+        return data
 
 
 @dataclass
@@ -73,6 +102,7 @@ class LLMResponse:
     usage: Optional[LLMUsage] = None
     finish_reason: Optional[str] = None
     tool_calls: Optional[List[Dict[str, Any]]] = None
+    reasoning_content: Optional[str] = None
 
 
 class LLMError(Exception):

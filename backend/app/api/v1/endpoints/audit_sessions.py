@@ -34,6 +34,7 @@ from app.models.project import Project
 from app.schemas.managed_vulnerability import ManagedVulnerabilityDetailResponse
 from app.models.user import User
 from app.services.agent.tools.sandbox_tool import SandboxManager
+from app.services.audit_chat_runtime.bridge import AuditChatRuntimeBridge
 from app.services.finding_runtime.bridge import FindingRuntimeBridge
 from app.services.llm.service import LLMService
 from app.services.runtime_core.runtime_guardrails import is_guardrails_enabled
@@ -154,6 +155,7 @@ class AuditSessionHandoffResponse(BaseModel):
 class AuditSessionMessageCreate(BaseModel):
     content: str
     mode: str = "chat"
+    selected_skill_refs: list[str] = []
 
 
 def _format_sse_event(payload: dict[str, Any]) -> str:
@@ -328,6 +330,78 @@ async def _build_runtime_follow_up_context(
     return bridge, sandbox_manager, model_name, max_turns
 
 
+async def _build_audit_chat_follow_up_context(
+    *,
+    session: AuditSession,
+    db: AsyncSession,
+) -> tuple[AuditChatRuntimeBridge, SandboxManager, str, int | None]:
+    from app.api.v1.endpoints.agent_tasks import _get_project_root, _get_user_config, _initialize_tools
+
+    task = await db.get(AgentTask, session.task_id) if session.task_id else None
+    project = await db.get(Project, session.project_id)
+    if task is None or project is None:
+        raise HTTPException(status_code=409, detail="Audit session is missing task or project context")
+
+    user_config = await _get_user_config(db, task.created_by)
+    other_config = (user_config or {}).get("otherConfig", {})
+    github_token = other_config.get("githubToken") or settings.GITHUB_TOKEN
+    gitlab_token = other_config.get("gitlabToken") or settings.GITLAB_TOKEN
+    gitea_token = other_config.get("giteaToken") or settings.GITEA_TOKEN
+    ssh_private_key = None
+    if other_config.get("sshPrivateKey"):
+        try:
+            ssh_private_key = decrypt_sensitive_data(other_config["sshPrivateKey"])
+        except Exception:
+            ssh_private_key = None
+
+    sandbox_manager = SandboxManager()
+    await sandbox_manager.initialize()
+
+    project_root = await _get_project_root(
+        project,
+        task.id,
+        task.branch_name,
+        github_token=github_token,
+        gitlab_token=gitlab_token,
+        gitea_token=gitea_token,
+        ssh_private_key=ssh_private_key,
+        event_emitter=None,
+    )
+
+    target_files = task.target_files
+    if target_files:
+        valid_target_files = [file_path for file_path in target_files if os.path.exists(os.path.join(project_root, file_path))]
+        target_files = valid_target_files or None
+
+    llm_service = LLMService(user_config=_build_agent_user_config(user_config, "audit_chat"))
+    tools = await _initialize_tools(
+        project_root,
+        llm_service,
+        user_config,
+        sandbox_manager=sandbox_manager,
+        exclude_patterns=task.exclude_patterns,
+        target_files=target_files,
+        project_id=str(project.id),
+        event_emitter=None,
+        task_id=task.id,
+        user_id=task.created_by,
+    )
+    bridge = AuditChatRuntimeBridge(
+        llm_service=llm_service,
+        tools=tools.get("finding", {}),
+        user_id=task.created_by,
+    )
+    latest_turn_model = await db.scalar(
+        select(AuditSessionTurn.model_name)
+        .where(AuditSessionTurn.session_id == session.id)
+        .order_by(AuditSessionTurn.sequence.desc())
+        .limit(1)
+    )
+    model_name = str(latest_turn_model or "audit_chat")
+    max_turns = _resolve_runtime_turn_limit(user_config, "audit_chat")
+    return bridge, sandbox_manager, model_name, max_turns
+
+
 async def continue_runtime_session(*, session_id: str, content: str, db: AsyncSession) -> None:
     del content
     session = await db.get(AuditSession, session_id)
@@ -341,6 +415,26 @@ async def continue_runtime_session(*, session_id: str, content: str, db: AsyncSe
         raise
     try:
         await bridge.continue_dialogue_session(session_id=session_id, model_name=model_name, max_turns=max_turns)
+    finally:
+        try:
+            await sandbox_manager.cleanup()
+        except Exception:
+            pass
+
+
+async def continue_audit_chat_session(*, session_id: str, content: str, db: AsyncSession) -> None:
+    del content
+    session = await db.get(AuditSession, session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="Audit session not found")
+    try:
+        bridge, sandbox_manager, model_name, max_turns = await _build_audit_chat_follow_up_context(session=session, db=db)
+    except HTTPException as exc:
+        if exc.status_code == 409:
+            return
+        raise
+    try:
+        await bridge.continue_chat_session(session_id=session_id, model_name=model_name, max_turns=max_turns)
     finally:
         try:
             await sandbox_manager.cleanup()
@@ -621,14 +715,14 @@ async def create_audit_session_message(
         role="user",
         content=payload.content,
         message_metadata=(
-            {"kind": "follow_up_user_message", "mode": mode}
+            {"kind": "follow_up_user_message", "mode": mode, "selected_skill_refs": list(payload.selected_skill_refs or [])}
             if session.runtime_stack == "runtime"
-            else {"mode": mode}
+            else {"mode": mode, "selected_skill_refs": list(payload.selected_skill_refs or [])}
         ),
         payload=(
-            {"continued": session.runtime_stack == "runtime", "mode": mode}
+            {"continued": session.runtime_stack == "runtime", "mode": mode, "selected_skill_refs": list(payload.selected_skill_refs or [])}
             if session.runtime_stack == "runtime"
-            else {"mode": mode}
+            else {"mode": mode, "selected_skill_refs": list(payload.selected_skill_refs or [])}
         ),
     )
     db.add(message)
@@ -644,7 +738,7 @@ async def create_audit_session_message(
                 await db.rollback()
                 raise HTTPException(status_code=400, detail=str(exc)) from exc
         else:
-            await continue_runtime_session(session_id=session_id, content=payload.content, db=db)
+            await continue_audit_chat_session(session_id=session_id, content=payload.content, db=db)
 
     return _to_message_mutation_response(
         message,
@@ -677,8 +771,18 @@ async def stream_audit_session_message(
         sequence=(next_sequence or 0) + 1,
         role="user",
         content=payload.content,
-        message_metadata={"kind": "follow_up_user_message", "streaming": True, "mode": mode},
-        payload={"continued": True, "streaming": True, "mode": mode},
+        message_metadata={
+            "kind": "follow_up_user_message",
+            "streaming": True,
+            "mode": mode,
+            "selected_skill_refs": list(payload.selected_skill_refs or []),
+        },
+        payload={
+            "continued": True,
+            "streaming": True,
+            "mode": mode,
+            "selected_skill_refs": list(payload.selected_skill_refs or []),
+        },
     )
     db.add(user_message)
     await db.commit()
@@ -695,7 +799,7 @@ async def stream_audit_session_message(
                 if mode == "generate_report_and_sync":
                     synced_managed_vulnerability = await _generate_and_sync_follow_up_managed_vulnerability(session=session, db=db)
                 else:
-                    await continue_runtime_session(session_id=session_id, content=payload.content, db=db)
+                    await continue_audit_chat_session(session_id=session_id, content=payload.content, db=db)
                 yield _format_sse_event({
                     "type": "done",
                     "usage": {},

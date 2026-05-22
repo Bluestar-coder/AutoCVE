@@ -97,7 +97,7 @@ export default function Login() {
                   <img src="/auditai_icon.svg" alt="AuditAI" className="h-11 w-11 object-contain" />
                 </div>
                 <div>
-                  <div className="text-3xl font-semibold tracking-[-0.05em] text-slate-900">AuditAI</div>
+                  <div className="text-3xl font-semibold tracking-[-0.05em] text-slate-900">AI Audit</div>
                   <p className="mt-1 text-sm text-slate-500">Security Review Workspace</p>
                 </div>
               </div>
@@ -144,7 +144,7 @@ export default function Login() {
               <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-[24px] border border-slate-200/80 bg-white/90 shadow-[0_14px_36px_rgba(92,104,120,0.08)]">
                 <img src="/auditai_icon.svg" alt="AuditAI" className="h-11 w-11 object-contain" />
               </div>
-              <h1 className="text-3xl font-semibold tracking-[-0.05em] text-slate-900">AuditAI</h1>
+              <h1 className="text-3xl font-semibold tracking-[-0.05em] text-slate-900">AI Audit</h1>
               <p className="mt-2 text-sm text-slate-500">{"\u767b\u5f55\u5e76\u7ee7\u7eed\u4f60\u7684\u5ba1\u8ba1\u6d41\u7a0b"}</p>
             </div>
 
@@ -153,7 +153,7 @@ export default function Login() {
                 <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-400">Welcome Back</p>
                 <div className="flex items-center justify-between gap-3">
                   <div>
-                    <h2 className="text-[2rem] font-semibold tracking-[-0.05em] text-slate-900">{"\u767b\u5f55 AuditAI"}</h2>
+                    <h2 className="text-[2rem] font-semibold tracking-[-0.05em] text-slate-900">{"\u767b\u5f55 AI Audit"}</h2>
                     <p className="mt-2 text-sm text-slate-500">{"\u8f93\u5165\u8d26\u53f7\u4fe1\u606f\uff0c\u7ee7\u7eed\u5904\u7406\u5ba1\u8ba1\u4efb\u52a1\u548c\u9879\u76ee\u534f\u4f5c\u3002"}</p>
                   </div>
                   <div className="hidden h-12 w-12 items-center justify-center rounded-2xl bg-[rgba(223,235,225,0.8)] text-[hsl(var(--primary))] sm:flex">
