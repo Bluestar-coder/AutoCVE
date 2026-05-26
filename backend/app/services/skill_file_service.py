@@ -13,7 +13,7 @@ import httpx
 
 from app.services.skills_runtime.discovery import parse_frontmatter
 
-AGENT_TYPES = ["orchestrator", "recon", "scan", "triage", "finding", "verification"]
+AGENT_TYPES = ["orchestrator", "recon", "scan", "triage", "finding", "verification", "audit_chat"]
 
 
 def _safe_relative_path(value: str) -> str:

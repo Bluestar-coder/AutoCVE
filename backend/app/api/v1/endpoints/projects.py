@@ -26,6 +26,7 @@ import zipfile
 from app.services.scanner import (
     scan_repo_task,
     get_github_files,
+    get_github_repository_metadata,
     get_gitlab_files,
     get_gitea_files,
     get_github_branches,
@@ -122,6 +123,82 @@ class ProjectFileContentResponse(BaseModel):
     content: str
     size: int
     truncated: bool = False
+
+
+class RepositoryBranchLookupRequest(BaseModel):
+    repository_url: str
+    repository_type: Optional[str] = "github"
+
+
+class RepositoryBranchLookupResponse(BaseModel):
+    branches: List[str]
+    default_branch: str
+    error: Optional[str] = None
+
+
+async def _get_repository_tokens(db: AsyncSession, user_id: str) -> dict[str, Optional[str]]:
+    from app.core.encryption import decrypt_sensitive_data
+
+    result = await db.execute(select(UserConfig).where(UserConfig.user_id == user_id))
+    config = result.scalar_one_or_none()
+
+    tokens: dict[str, Optional[str]] = {
+        "github": settings.GITHUB_TOKEN,
+        "gitlab": settings.GITLAB_TOKEN,
+        "gitea": settings.GITEA_TOKEN,
+    }
+
+    if not config or not config.other_config:
+        return tokens
+
+    other_config = json.loads(config.other_config)
+    for config_key, token_key in (
+        ("githubToken", "github"),
+        ("gitlabToken", "gitlab"),
+        ("giteaToken", "gitea"),
+    ):
+        encrypted_value = other_config.get(config_key)
+        if encrypted_value:
+            tokens[token_key] = decrypt_sensitive_data(encrypted_value)
+    return tokens
+
+
+async def _lookup_repository_branches(
+    *,
+    repo_url: str,
+    repo_type: str,
+    tokens: dict[str, Optional[str]],
+    stored_default_branch: Optional[str] = None,
+) -> dict[str, Any]:
+    repo_type = repo_type or "other"
+
+    remote_default_branch: Optional[str] = None
+    if repo_type == "github":
+        metadata = await get_github_repository_metadata(repo_url, tokens.get("github"))
+        remote_default_branch = metadata.get("default_branch")
+        branches = await get_github_branches(repo_url, tokens.get("github"))
+    elif repo_type == "gitlab":
+        branches = await get_gitlab_branches(repo_url, tokens.get("gitlab"))
+    elif repo_type == "gitea":
+        branches = await get_gitea_branches(repo_url, tokens.get("gitea"))
+    else:
+        fallback = stored_default_branch or "main"
+        return {"branches": [fallback], "default_branch": fallback}
+
+    branches = [branch for branch in branches if branch]
+    if not branches:
+        fallback = remote_default_branch or stored_default_branch or "main"
+        return {"branches": [fallback], "default_branch": fallback}
+
+    if remote_default_branch and remote_default_branch in branches:
+        default_branch = remote_default_branch
+    elif stored_default_branch and stored_default_branch in branches:
+        default_branch = stored_default_branch
+    else:
+        default_branch = branches[0]
+
+    ordered_branches = [default_branch] + [branch for branch in branches if branch != default_branch]
+    return {"branches": ordered_branches, "default_branch": default_branch}
 
 
 def _get_managed_projects_root() -> Path:
@@ -324,6 +401,20 @@ async def create_project(
             raise HTTPException(status_code=400, detail="local directory is already registered")
     elif source_type == "zip":
         normalized_local_path = _normalize_zip_local_path(project_in.local_path)
+
+    default_branch = project_in.default_branch or "main"
+    if source_type == "repository" and project_in.repository_url:
+        try:
+            tokens = await _get_repository_tokens(db, current_user.id)
+            branch_payload = await _lookup_repository_branches(
+                repo_url=project_in.repository_url,
+                repo_type=project_in.repository_type or "other",
+                tokens=tokens,
+                stored_default_branch=project_in.default_branch,
+            )
+            default_branch = branch_payload["default_branch"]
+        except Exception:
+            default_branch = project_in.default_branch or "main"
     
     project = Project(
         name=project_in.name,
@@ -335,7 +426,7 @@ async def create_project(
             "in_place" if source_type == "local_directory" else "persistent_source" if source_type == "zip" else None
         ),
         description=project_in.description,
-        default_branch=project_in.default_branch or "main",
+        default_branch=default_branch,
         programming_languages=json.dumps(project_in.programming_languages or []),
         owner_id=current_user.id
     )
@@ -454,6 +545,29 @@ async def get_stats(
         "resolved_issues": resolved_issues,
         "avg_quality_score": avg_quality_score,
     }
+
+
+@router.post("/repository-branches", response_model=RepositoryBranchLookupResponse)
+async def lookup_repository_branches(
+    *,
+    db: AsyncSession = Depends(get_db),
+    payload: RepositoryBranchLookupRequest,
+    current_user: User = Depends(deps.get_current_user),
+) -> Any:
+    if not payload.repository_url:
+        raise HTTPException(status_code=422, detail="repository_url is required")
+
+    try:
+        tokens = await _get_repository_tokens(db, current_user.id)
+        return await _lookup_repository_branches(
+            repo_url=payload.repository_url,
+            repo_type=payload.repository_type or "other",
+            tokens=tokens,
+        )
+    except Exception as exc:
+        fallback = "main"
+        return {"branches": [fallback], "default_branch": fallback, "error": str(exc)}
+
 
 @router.get("/{id}", response_model=ProjectResponse)
 async def read_project(
@@ -1197,6 +1311,32 @@ async def get_project_branches(
     if project.source_type != "repository":
         raise HTTPException(status_code=400, detail="仅仓库类型项目支持获取分支")
     
+    if project.repository_url:
+        repo_type = project.repository_type or "other"
+        print(f"[Branch] project={project.name}, type={repo_type}, url={project.repository_url}")
+
+        try:
+            tokens = await _get_repository_tokens(db, current_user.id)
+            branch_payload = await _lookup_repository_branches(
+                repo_url=project.repository_url,
+                repo_type=repo_type,
+                tokens=tokens,
+                stored_default_branch=project.default_branch,
+            )
+            if project.default_branch != branch_payload["default_branch"]:
+                project.default_branch = branch_payload["default_branch"]
+                project.updated_at = datetime.now(timezone.utc)
+                await db.commit()
+            print(f"[Branch] fetched {len(branch_payload['branches'])} branches")
+            return branch_payload
+        except Exception as e:
+            print(f"[Branch] failed to fetch branches: {e}")
+            return {
+                "branches": [project.default_branch or "main"],
+                "default_branch": project.default_branch or "main",
+                "error": str(e),
+            }
+
     if not project.repository_url:
         raise HTTPException(status_code=400, detail="项目未配置仓库地址")
     

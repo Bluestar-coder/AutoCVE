@@ -1869,6 +1869,39 @@ def test_query_loop_forwards_streaming_reasoning_to_event_sink():
     assert reasoning_events[-1]["accumulated"] == "Need to inspect auth middleware."
 
 
+def test_query_loop_forwards_streaming_tool_messages_to_event_sink():
+    store = build_store()
+    session_id = store.create_session(project_id="project-1", system_prompt="system")
+    store.append_message(session_id, TranscriptItem(role=RuntimeMessageRole.USER, content="inspect repo"))
+    client = StreamingFakeModelClient(
+        stream_events=[
+            {"type": "tool_call", "tool_call": {"id": "tool-1", "name": "echo", "input": {"text": "repo summary"}}},
+            {
+                "type": "done",
+                "content": "",
+                "stop_reason": RuntimeStopReason.COMPLETED.value,
+            },
+        ]
+    )
+    events = []
+    registry = ToolRegistry([EchoTool()])
+    orchestrator = ToolOrchestrator(session_store=store, tool_registry=registry)
+    loop = QueryLoop(
+        session_store=store,
+        model_client=client,
+        tool_registry=registry,
+        tool_orchestrator=orchestrator,
+        event_sink=events.append,
+    )
+
+    asyncio.run(loop.run_turn(session_id=session_id, model_name="gpt-test"))
+
+    message_events = [event for event in events if event.get("type") == "message"]
+    assert [event["message"]["role"] for event in message_events] == ["tool_use", "tool_result"]
+    assert message_events[0]["message"]["content"] == "echo"
+    assert message_events[1]["message"]["content"] == "echo:repo summary"
+
+
 def test_query_loop_preserves_raw_stream_error_in_event_sink_and_checkpoint():
     store = build_store()
     session_id = store.create_session(project_id="project-1", system_prompt="system")

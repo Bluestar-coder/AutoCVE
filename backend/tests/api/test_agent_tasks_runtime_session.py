@@ -1393,3 +1393,12 @@ async def test_initialize_tools_builds_sandbox_tools_without_local_scope_error(m
     assert 'security_search' not in tools['analysis']
     assert 'function_context' not in tools['analysis']
     assert 'rag_query' not in tools['finding']
+    assert 'query_security_knowledge' not in tools['analysis']
+    assert 'get_vulnerability_knowledge' not in tools['analysis']
+
+
+def test_initialize_tools_does_not_import_legacy_knowledge_tools():
+    source = Path(agent_tasks_endpoint.__file__).read_text(encoding='utf-8')
+    initialize_tools_source = source[source.index('async def _initialize_tools') : source.index('async def _collect_project_info')]
+    assert 'SecurityKnowledgeQueryTool' not in initialize_tools_source
+    assert 'GetVulnerabilityKnowledgeTool' not in initialize_tools_source

@@ -1433,10 +1433,6 @@ async def _initialize_tools(
         build_agent_skill_tools,
         build_agent_tool_catalog,
     )
-    from app.services.agent.knowledge import (
-        SecurityKnowledgeQueryTool,
-        GetVulnerabilityKnowledgeTool,
-    )
     async def emit(message: str, level: str = "info") -> None:
         if not event_emitter:
             return
@@ -1482,8 +1478,6 @@ async def _initialize_tools(
         "pattern_match": PatternMatchTool(project_root),
         "dataflow_analysis": DataFlowAnalysisTool(llm_service),
         **shared_scanners,
-        "query_security_knowledge": SecurityKnowledgeQueryTool(),
-        "get_vulnerability_knowledge": GetVulnerabilityKnowledgeTool(),
     }
 
     scan_tools = {

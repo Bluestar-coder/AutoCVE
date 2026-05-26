@@ -48,6 +48,7 @@ const AGENT_OPTIONS = [
   { value: 'triage', label: 'triage Agent' },
   { value: 'finding', label: 'finding Agent' },
   { value: 'verification', label: 'verification Agent' },
+  { value: 'audit_chat', label: '用户会话' },
 ] as const;
 
 const HOST_PROJECT_ROOT = (import.meta.env.VITE_HOST_PROJECT_ROOT as string | undefined) || '';

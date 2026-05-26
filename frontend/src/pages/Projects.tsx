@@ -19,6 +19,7 @@ import {
   Plus,
   Search,
   GitBranch,
+  Loader2,
   Calendar,
   Users,
   Code,
@@ -38,6 +39,7 @@ import {
   HardDrive
 } from "lucide-react";
 import { api } from "@/shared/config/database";
+import { BranchSelector } from "@/components/ui/branch-selector";
 import { validateZipFile } from "@/features/projects/services";
 import type { Project, CreateProjectForm, ManagedLocalDirectory } from "@/shared/types";
 import {
@@ -90,6 +92,9 @@ export default function Projects() {
     default_branch: "main",
     programming_languages: []
   });
+  const [createBranches, setCreateBranches] = useState<string[]>([]);
+  const [loadingCreateBranches, setLoadingCreateBranches] = useState(false);
+  const [createBranchError, setCreateBranchError] = useState<string | null>(null);
 
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [keepZipArchive, setKeepZipArchive] = useState(true);
@@ -132,6 +137,57 @@ export default function Projects() {
       void loadManagedDirectories();
     }
   }, [showCreateDialog]);
+
+  useEffect(() => {
+    if (!showCreateDialog || createForm.source_type !== "repository") {
+      setCreateBranches([]);
+      setCreateBranchError(null);
+      setLoadingCreateBranches(false);
+      return;
+    }
+
+    const repositoryUrl = createForm.repository_url?.trim();
+    const repositoryType = createForm.repository_type || "github";
+    if (!repositoryUrl || repositoryType !== "github") {
+      setCreateBranches([]);
+      setCreateBranchError(null);
+      setLoadingCreateBranches(false);
+      return;
+    }
+
+    let cancelled = false;
+    setLoadingCreateBranches(true);
+    setCreateBranchError(null);
+
+    const timer = window.setTimeout(async () => {
+      const result = await api.lookupRepositoryBranches({
+        repository_url: repositoryUrl,
+        repository_type: repositoryType,
+      });
+      if (cancelled) {
+        return;
+      }
+
+      if (result.error) {
+        setCreateBranches([]);
+        setCreateBranchError(result.error);
+      } else {
+        setCreateBranches(result.branches);
+        if (result.default_branch) {
+          setCreateForm((previous) => ({
+            ...previous,
+            default_branch: result.default_branch,
+          }));
+        }
+      }
+      setLoadingCreateBranches(false);
+    }, 500);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [showCreateDialog, createForm.source_type, createForm.repository_type, createForm.repository_url]);
 
   const loadProjects = async () => {
     try {
@@ -214,6 +270,9 @@ export default function Projects() {
       default_branch: "main",
       programming_languages: []
     });
+    setCreateBranches([]);
+    setCreateBranchError(null);
+    setLoadingCreateBranches(false);
     setSelectedFile(null);
     setKeepZipArchive(true);
     if (fileInputRef.current) {
@@ -671,13 +730,38 @@ export default function Projects() {
                   </div>
                   <div className="space-y-1.5">
                     <Label htmlFor="default_branch" className="font-mono font-bold uppercase text-xs text-muted-foreground">默认分支</Label>
-                    <Input
-                      id="default_branch"
-                      value={createForm.default_branch}
-                      onChange={(e) => setCreateForm({ ...createForm, default_branch: e.target.value })}
-                      placeholder="main"
-                      className="cyber-input"
-                    />
+                    {loadingCreateBranches ? (
+                      <div className="flex h-10 items-center gap-2 rounded border border-border bg-muted/30 px-3 font-mono text-sm text-muted-foreground">
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                        Loading remote branches...
+                      </div>
+                    ) : createBranches.length > 0 ? (
+                      <BranchSelector
+                        value={createForm.default_branch || ""}
+                        onChange={(value) => setCreateForm({ ...createForm, default_branch: value })}
+                        branches={createBranches}
+                        placeholder="Select default branch"
+                        className="h-10"
+                      />
+                    ) : (
+                      <Input
+                        id="default_branch"
+                        value={createForm.default_branch}
+                        onChange={(e) => setCreateForm({ ...createForm, default_branch: e.target.value })}
+                        placeholder="main"
+                        className="cyber-input"
+                      />
+                    )}
+                    {createBranches.length > 0 && (
+                      <p className="text-xs text-muted-foreground font-mono">
+                        Loaded {createBranches.length} branches; using the remote default_branch.
+                      </p>
+                    )}
+                    {createBranchError && (
+                      <p className="text-xs text-amber-500 font-mono">
+                        Could not load remote branches. You can enter one manually: {createBranchError}
+                      </p>
+                    )}
                   </div>
                 </div>
 

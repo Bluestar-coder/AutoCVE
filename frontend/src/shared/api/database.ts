@@ -101,6 +101,18 @@ export const api = {
     }
   },
 
+  async lookupRepositoryBranches(params: {
+    repository_url: string;
+    repository_type?: string;
+  }): Promise<{ branches: string[]; default_branch: string; error?: string }> {
+    try {
+      const res = await apiClient.post('/projects/repository-branches', params);
+      return res.data;
+    } catch (e) {
+      return { branches: [], default_branch: "", error: String(e) };
+    }
+  },
+
   async uploadProjectZip(id: string, file: File): Promise<{ message: string; original_filename: string; file_size: number }> {
     const formData = new FormData();
     formData.append('file', file);

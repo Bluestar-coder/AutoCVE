@@ -422,7 +422,13 @@ async def continue_runtime_session(*, session_id: str, content: str, db: AsyncSe
             pass
 
 
-async def continue_audit_chat_session(*, session_id: str, content: str, db: AsyncSession) -> None:
+async def continue_audit_chat_session(
+    *,
+    session_id: str,
+    content: str,
+    db: AsyncSession,
+    event_sink=None,
+) -> None:
     del content
     session = await db.get(AuditSession, session_id)
     if session is None:
@@ -434,7 +440,12 @@ async def continue_audit_chat_session(*, session_id: str, content: str, db: Asyn
             return
         raise
     try:
-        await bridge.continue_chat_session(session_id=session_id, model_name=model_name, max_turns=max_turns)
+        await bridge.continue_chat_session(
+            session_id=session_id,
+            model_name=model_name,
+            max_turns=max_turns,
+            event_sink=event_sink,
+        )
     finally:
         try:
             await sandbox_manager.cleanup()
@@ -799,7 +810,37 @@ async def stream_audit_session_message(
                 if mode == "generate_report_and_sync":
                     synced_managed_vulnerability = await _generate_and_sync_follow_up_managed_vulnerability(session=session, db=db)
                 else:
-                    await continue_audit_chat_session(session_id=session_id, content=payload.content, db=db)
+                    queue: asyncio.Queue[dict[str, Any] | None] = asyncio.Queue()
+
+                    async def collect_event(event: dict[str, Any]):
+                        await queue.put(event)
+
+                    async def worker():
+                        try:
+                            await continue_audit_chat_session(
+                                session_id=session_id,
+                                content=payload.content,
+                                db=db,
+                                event_sink=collect_event,
+                            )
+                        finally:
+                            await queue.put(None)
+
+                    worker_task = asyncio.create_task(worker())
+                    try:
+                        while True:
+                            try:
+                                event = await asyncio.wait_for(queue.get(), timeout=15.0)
+                            except asyncio.TimeoutError:
+                                yield _format_sse_event({"type": "heartbeat"})
+                                continue
+                            if event is None:
+                                break
+                            yield _format_sse_event(event)
+                        await worker_task
+                    finally:
+                        if not worker_task.done():
+                            worker_task.cancel()
                 yield _format_sse_event({
                     "type": "done",
                     "usage": {},

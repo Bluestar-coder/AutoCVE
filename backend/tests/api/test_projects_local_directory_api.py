@@ -141,6 +141,109 @@ async def test_create_local_directory_project_requires_local_path():
 
 
 @pytest.mark.asyncio
+async def test_create_github_project_uses_remote_default_branch(monkeypatch):
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+    async with session_factory() as db:
+        db.add(
+            User(
+                id="user-1",
+                email="owner@example.com",
+                hashed_password="not-a-real-hash",
+                full_name="Owner",
+                is_active=True,
+            )
+        )
+        await db.commit()
+
+    async def fake_get_github_repository_metadata(repo_url: str, token: str | None = None):
+        assert repo_url == "https://github.com/Tautulli/Tautulli"
+        return {"default_branch": "master"}
+
+    async def fake_get_github_branches(repo_url: str, token: str | None = None):
+        return ["master", "beta", "nightly"]
+
+    monkeypatch.setattr(projects_endpoint, "get_github_repository_metadata", fake_get_github_repository_metadata)
+    monkeypatch.setattr(projects_endpoint, "get_github_branches", fake_get_github_branches)
+
+    async with session_factory() as db:
+        created = await projects_endpoint.create_project(
+            db=db,
+            project_in=projects_endpoint.ProjectCreate(
+                name="Tautulli",
+                source_type="repository",
+                repository_type="github",
+                repository_url="https://github.com/Tautulli/Tautulli",
+            ),
+            current_user=SimpleNamespace(id="user-1", is_active=True),
+        )
+
+    await engine.dispose()
+
+    assert created.default_branch == "master"
+
+
+@pytest.mark.asyncio
+async def test_get_project_branches_falls_back_when_stored_default_branch_is_missing(monkeypatch):
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+    async with session_factory() as db:
+        db.add(
+            User(
+                id="user-1",
+                email="owner@example.com",
+                hashed_password="not-a-real-hash",
+                full_name="Owner",
+                is_active=True,
+            )
+        )
+        db.add(
+            Project(
+                id="project-1",
+                name="Tautulli",
+                source_type="repository",
+                repository_url="https://github.com/Tautulli/Tautulli",
+                repository_type="github",
+                default_branch="main",
+                owner_id="user-1",
+                is_active=True,
+            )
+        )
+        await db.commit()
+
+    async def fake_get_github_repository_metadata(repo_url: str, token: str | None = None):
+        return {"default_branch": "master"}
+
+    async def fake_get_github_branches(repo_url: str, token: str | None = None):
+        return ["beta", "master", "nightly"]
+
+    monkeypatch.setattr(projects_endpoint, "get_github_repository_metadata", fake_get_github_repository_metadata)
+    monkeypatch.setattr(projects_endpoint, "get_github_branches", fake_get_github_branches)
+
+    async with session_factory() as db:
+        payload = await projects_endpoint.get_project_branches(
+            id="project-1",
+            db=db,
+            current_user=SimpleNamespace(id="user-1", is_active=True),
+        )
+        project = await db.get(Project, "project-1")
+
+    await engine.dispose()
+
+    assert payload["default_branch"] == "master"
+    assert payload["branches"][0] == "master"
+    assert project.default_branch == "master"
+
+
+@pytest.mark.asyncio
 async def test_create_local_directory_project_rejects_duplicate_registration():
     engine = create_async_engine("sqlite+aiosqlite:///:memory:")
     session_factory = async_sessionmaker(engine, expire_on_commit=False)

@@ -1,5 +1,8 @@
 import json
 
+import pytest
+
+from app.services.init_agent_assets import init_skill_bindings
 from app.services.skill_file_service import SkillFileService
 
 
@@ -59,3 +62,30 @@ def test_skill_file_service_binding_refresh_no_longer_creates_agent_skill_mirror
     assert not (tmp_path / "skill_library" / "agents" / "finding" / "alpha").exists()
     assert installed_index["skills"][0]["bound_agents"] == ["finding"]
     assert installed_index["skills"][0]["bindings"][0]["id"] == "finding:alpha"
+
+
+@pytest.mark.asyncio
+async def test_audit_chat_agent_bindings_default_to_all_local_skills(tmp_path, monkeypatch):
+    monkeypatch.setattr(SkillFileService, "project_root", classmethod(lambda cls: tmp_path))
+
+    SkillFileService.write_skill(
+        slug="alpha",
+        name="alpha",
+        description="Alpha skill",
+        content="# Alpha",
+        tags=[],
+    )
+    SkillFileService.write_skill(
+        slug="beta",
+        name="beta",
+        description="Beta skill",
+        content="# Beta",
+        tags=[],
+    )
+
+    await init_skill_bindings()
+
+    payload = SkillFileService.get_agent_bindings("audit_chat")
+    assert payload["agent_type"] == "audit_chat"
+    assert [item["slug"] for item in payload["skills"]] == ["alpha", "beta"]
+    assert all(item["enabled"] for item in payload["skills"])

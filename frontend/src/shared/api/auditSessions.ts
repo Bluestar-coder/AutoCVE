@@ -100,12 +100,23 @@ export interface AuditSessionMessageMutationResponse extends AuditSessionMessage
 }
 
 export interface AuditSessionStreamEvent {
-  type: "session_created" | "user_message" | "assistant_start" | "token" | "done" | "error" | "llm_retry";
+  type:
+    | "session_created"
+    | "user_message"
+    | "assistant_start"
+    | "message"
+    | "token"
+    | "reasoning_delta"
+    | "done"
+    | "error"
+    | "llm_retry"
+    | "heartbeat";
   session_id?: string;
   project_id?: string;
   message?: AuditSessionMessage;
   content?: string;
   accumulated?: string;
+  reasoning_content?: string;
   usage?: Record<string, unknown>;
   message_text?: string;
   attempt?: number;

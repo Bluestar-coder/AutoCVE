@@ -37,6 +37,8 @@ LEGACY_FINDING_SKILLS: List[Dict[str, Any]] = [
     },
 ]
 
+AUDIT_CHAT_AGENT_TYPE = "audit_chat"
+
 DEFAULT_REPORT_TEMPLATE_SLUG = "report-template"
 DEFAULT_REPORT_TEMPLATE_NAME = "Default Vulnerability Report"
 DEFAULT_REPORT_TEMPLATE_DESCRIPTION = "AuditAI default final vulnerability report template."
@@ -87,6 +89,20 @@ async def init_skill_bindings() -> List[str]:
                 match_config={},
             )
             slugs.append(slug)
+
+    for slug in SkillFileService.list_skill_slugs():
+        normalized_slug = SkillFileService.slugify(slug)
+        if not _binding_exists(AUDIT_CHAT_AGENT_TYPE, normalized_slug):
+            SkillFileService.upsert_binding(
+                AUDIT_CHAT_AGENT_TYPE,
+                normalized_slug,
+                enabled=True,
+                always_include=False,
+                sort_order=10,
+                match_keywords=[],
+                match_config={},
+            )
+            slugs.append(normalized_slug)
 
     SkillFileService.sync_all()
     return slugs

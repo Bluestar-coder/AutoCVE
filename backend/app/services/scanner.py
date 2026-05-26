@@ -180,6 +180,16 @@ async def get_github_branches(repo_url: str, token: str = None) -> List[str]:
     return [b["name"] for b in branches_data]
 
 
+async def get_github_repository_metadata(repo_url: str, token: str = None) -> Dict[str, Any]:
+    """Fetch GitHub repository metadata used for import defaults."""
+    repo_info = parse_repository_url(repo_url, "github")
+    owner, repo = repo_info['owner'], repo_info['repo']
+
+    repo_api_url = f"https://api.github.com/repos/{owner}/{repo}"
+    data = await github_api(repo_api_url, token)
+    return {"default_branch": data.get("default_branch")}
+
+
 
 
 

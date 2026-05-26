@@ -275,18 +275,12 @@ class QueryLoop:
         if tool_requests:
             if not streamed_tool_uses:
                 for request in tool_requests:
-                    tool_use_item = TranscriptItem(
-                        role=RuntimeMessageRole.TOOL_USE,
-                        content=request.name,
-                        name=request.name,
-                        payload={
-                            "tool_use_id": request.id,
-                            "tool_name": request.name,
-                            "input": request.input,
-                        },
+                    message_id = self._append_tool_use_message(
+                        session_id=session_id,
+                        working_messages=working_messages,
+                        request=request,
                     )
-                    self._session_store.append_message(session_id, tool_use_item)
-                    working_messages.append(tool_use_item)
+                    await self._emit_message_event(message_id)
 
             if self._tool_orchestrator is None:
                 if tool_definitions:
@@ -316,7 +310,7 @@ class QueryLoop:
                             initial_context=tool_use_context,
                         )
                         async for update in executor.get_remaining_updates():
-                            tool_use_context = self._consume_executor_update(
+                            tool_use_context = await self._consume_executor_update(
                                 session_id=session_id,
                                 update=update,
                                 working_messages=working_messages,
@@ -335,7 +329,7 @@ class QueryLoop:
                             recon_payload=snapshot.session.recon_payload or {},
                         )
                         for record in fallback_records:
-                            tool_use_context = self._consume_executor_update(
+                            tool_use_context = await self._consume_executor_update(
                                 session_id=session_id,
                                 update=type("Update", (), {"kind": "record", "record": record, "progress_payload": None, "new_context": None})(),
                                 working_messages=working_messages,
@@ -861,6 +855,29 @@ class QueryLoop:
         if inspect.isawaitable(maybe_awaitable):
             await maybe_awaitable
 
+    async def _emit_message_event(self, message_id: str) -> None:
+        if self._event_sink is None:
+            return
+        message = self._session_store.get_message(message_id)
+        if message is None:
+            return
+        await self._emit_event(
+            {
+                "type": "message",
+                "message": {
+                    "id": message.id,
+                    "session_id": message.session_id,
+                    "sequence": message.sequence,
+                    "role": message.role,
+                    "content": message.content,
+                    "name": message.name,
+                    "metadata": dict(message.message_metadata or {}),
+                    "payload": dict(message.payload or {}),
+                    "created_at": message.created_at.isoformat(),
+                },
+            }
+        )
+
     async def _collect_model_turn(
         self,
         *,
@@ -1035,6 +1052,23 @@ class QueryLoop:
                     (event or {}).get("accumulated")
                     or (assistant_reasoning_content + reasoning_delta_content)
                 )
+                if self._event_sink is not None and not assistant_stream_started:
+                    assistant_stream_started = True
+                    await self._emit_event(
+                        {
+                            "type": "assistant_start",
+                            "message": {
+                                "id": assistant_stream_placeholder_id,
+                                "session_id": session_id,
+                                "sequence": assistant_stream_sequence,
+                                "role": "assistant",
+                                "content": "",
+                                "metadata": {"kind": "direct_audit_assistant_message", "streaming": True},
+                                "payload": {},
+                                "created_at": datetime.now(timezone.utc).isoformat(),
+                            },
+                        }
+                    )
                 await self._emit_event(
                     {
                         "type": "reasoning_delta",
@@ -1083,13 +1117,14 @@ class QueryLoop:
                         content=assistant_content,
                         reasoning_content=assistant_reasoning_content,
                     )
-                self._append_tool_use_message(session_id=session_id, working_messages=working_messages, request=request)
+                tool_use_message_id = self._append_tool_use_message(session_id=session_id, working_messages=working_messages, request=request)
+                await self._emit_message_event(tool_use_message_id)
                 tool_requests.append(request)
                 if executor is not None:
                     executor.add_tool_call_request(request)
                     await executor.process_queue()
                     for update in executor.get_completed_updates():
-                        tool_use_context = self._consume_executor_update(
+                        tool_use_context = await self._consume_executor_update(
                             session_id=session_id,
                             update=update,
                             working_messages=working_messages,
@@ -1130,13 +1165,14 @@ class QueryLoop:
                     )
                     if any(existing.id == request.id for existing in tool_requests):
                         continue
-                    self._append_tool_use_message(session_id=session_id, working_messages=working_messages, request=request)
+                    tool_use_message_id = self._append_tool_use_message(session_id=session_id, working_messages=working_messages, request=request)
+                    await self._emit_message_event(tool_use_message_id)
                     tool_requests.append(request)
                     if executor is not None:
                         executor.add_tool_call_request(request)
                         await executor.process_queue()
                         for update in executor.get_completed_updates():
-                            tool_use_context = self._consume_executor_update(
+                            tool_use_context = await self._consume_executor_update(
                                 session_id=session_id,
                                 update=update,
                                 working_messages=working_messages,
@@ -1166,7 +1202,7 @@ class QueryLoop:
                 raise RuntimeError(self._format_stream_error_for_exception(error_event))
         if executor is not None:
             async for update in executor.get_remaining_updates():
-                tool_use_context = self._consume_executor_update(
+                tool_use_context = await self._consume_executor_update(
                     session_id=session_id,
                     update=update,
                     working_messages=working_messages,
@@ -1265,7 +1301,7 @@ class QueryLoop:
             return f"{user_message} 原始错误：{raw_error}"
         return user_message or raw_error or "Streaming failed"
 
-    def _consume_executor_update(
+    async def _consume_executor_update(
         self,
         *,
         session_id: str,
@@ -1278,8 +1314,9 @@ class QueryLoop:
     ) -> dict[str, Any]:
         if update.kind == "progress" and update.progress_payload is not None:
             progress_item = self._build_tool_progress_item(update)
-            self._session_store.append_message(session_id, progress_item)
+            message_id = self._session_store.append_message(session_id, progress_item)
             working_messages.append(progress_item)
+            await self._emit_message_event(message_id)
             return tool_use_context
         if update.kind == "context" and update.new_context is not None:
             return dict(update.new_context)
@@ -1306,8 +1343,10 @@ class QueryLoop:
                 "error_message": record.error_message,
             },
         )
-        tool_result_message_ids.append(self._session_store.append_message(session_id, tool_result_item))
+        message_id = self._session_store.append_message(session_id, tool_result_item)
+        tool_result_message_ids.append(message_id)
         working_messages.append(tool_result_item)
+        await self._emit_message_event(message_id)
         return tool_use_context
 
     @staticmethod
@@ -1417,15 +1456,16 @@ class QueryLoop:
                 item.payload.update(payload)
                 return
 
-    def _append_tool_use_message(self, *, session_id: str, working_messages: list[TranscriptItem], request: ToolCallRequest) -> None:
+    def _append_tool_use_message(self, *, session_id: str, working_messages: list[TranscriptItem], request: ToolCallRequest) -> str:
         tool_use_item = TranscriptItem(
             role=RuntimeMessageRole.TOOL_USE,
             content=request.name,
             name=request.name,
             payload={"tool_use_id": request.id, "tool_name": request.name, "input": request.input},
         )
-        self._session_store.append_message(session_id, tool_use_item)
+        message_id = self._session_store.append_message(session_id, tool_use_item)
         working_messages.append(tool_use_item)
+        return message_id
 
     @staticmethod
     def _tool_request_from_event(event: dict[str, Any], *, fallback_index: int) -> ToolCallRequest | None:

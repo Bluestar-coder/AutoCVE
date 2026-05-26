@@ -424,10 +424,22 @@ async def test_stream_follow_up_message_for_runtime_session_uses_audit_chat_runt
     async def override_get_current_user():
         return SimpleNamespace(id="user-1", is_active=True)
 
-    continuation_calls: list[tuple[str, str]] = []
+    continuation_calls: list[tuple[str, str, bool]] = []
 
-    async def fake_continue_audit_chat_session(*, session_id: str, content: str, db):
-        continuation_calls.append((session_id, content))
+    async def fake_continue_audit_chat_session(*, session_id: str, content: str, db, event_sink=None):
+        continuation_calls.append((session_id, content, callable(event_sink)))
+        if event_sink is not None:
+            await event_sink({"type": "assistant_start", "message": {
+                "id": "streaming-assistant",
+                "session_id": session_id,
+                "sequence": 2,
+                "role": "assistant",
+                "content": "",
+                "metadata": {"kind": "runtime_follow_up_response", "streaming": True},
+                "payload": {},
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            }})
+            await event_sink({"type": "token", "content": "Runtime", "accumulated": "Runtime"})
         db.add(
             AuditSessionMessage(
                 session_id=session_id,
@@ -461,8 +473,9 @@ async def test_stream_follow_up_message_for_runtime_session_uses_audit_chat_runt
     await engine.dispose()
 
     assert response.status_code == 200
-    assert continuation_calls == [(session_id, "please continue the audit")]
-    assert '"type": "user_message"' in response.text
+    assert continuation_calls == [(session_id, "please continue the audit", True)]
+    assert response.text.index('"type": "user_message"') < response.text.index('"type": "assistant_start"')
+    assert '"type": "token"' in response.text
     assert '"type": "done"' in response.text
     assert len(messages.json()) == 2
     assert messages.json()[0]["metadata"]["kind"] == "follow_up_user_message"
@@ -499,7 +512,8 @@ async def test_stream_follow_up_message_can_generate_report_and_sync(monkeypatch
 
     continue_called = False
 
-    async def fake_continue_runtime_session(*, session_id: str, content: str, db):
+    async def fake_continue_runtime_session(*, session_id: str, content: str, db, event_sink=None):
+        del event_sink
         nonlocal continue_called
         continue_called = True
 
@@ -636,10 +650,10 @@ async def test_continue_audit_chat_session_uses_audit_chat_bridge(monkeypatch):
 
     class DummyBridge:
         def __init__(self):
-            self.chat_calls: list[tuple[str, str, int | None]] = []
+            self.chat_calls: list[tuple[str, str, int | None, bool]] = []
 
-        async def continue_chat_session(self, *, session_id: str, model_name: str, max_turns: int | None):
-            self.chat_calls.append((session_id, model_name, max_turns))
+        async def continue_chat_session(self, *, session_id: str, model_name: str, max_turns: int | None, event_sink=None):
+            self.chat_calls.append((session_id, model_name, max_turns, callable(event_sink)))
 
     bridge = DummyBridge()
     sandbox = DummySandbox()
@@ -657,7 +671,8 @@ async def test_continue_audit_chat_session_uses_audit_chat_bridge(monkeypatch):
         session_id='session-1',
         content='please keep auditing',
         db=DummyDb(),
+        event_sink=lambda event: None,
     )
 
-    assert bridge.chat_calls == [('session-1', 'finding-runtime', None)]
+    assert bridge.chat_calls == [('session-1', 'finding-runtime', None, True)]
     assert sandbox.cleaned is True

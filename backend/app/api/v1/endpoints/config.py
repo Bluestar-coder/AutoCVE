@@ -24,7 +24,7 @@ from app.services.skill_file_service import SkillFileService
 
 router = APIRouter()
 
-AGENT_TYPES = ["orchestrator", "recon", "scan", "triage", "finding", "verification"]
+AGENT_TYPES = ["orchestrator", "recon", "scan", "triage", "finding", "verification", "audit_chat"]
 WORKFLOW_AGENT_TYPES = ["orchestrator", "recon", "scan", "triage", "finding", "verification"]
 WORKFLOW_LOCKED_AGENTS = {"orchestrator", "recon"}
 SENSITIVE_LLM_FIELDS = [

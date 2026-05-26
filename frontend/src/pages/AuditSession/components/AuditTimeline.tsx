@@ -1,5 +1,5 @@
-import { useMemo } from "react";
-import { Bot, BrainCircuit, MessageSquareQuote, Square, UserRound, Wrench } from "lucide-react";
+import { useMemo, useState } from "react";
+import { Bot, BrainCircuit, ChevronDown, ChevronRight, ChevronUp, MessageSquareQuote, Square, Terminal, UserRound, Wrench } from "lucide-react";
 import { marked } from "marked";
 
 import { Button } from "@/components/ui/button";
@@ -18,6 +18,10 @@ function formatTimestamp(value?: string) {
     hour: "2-digit",
     minute: "2-digit",
   });
+}
+
+function formatSequence(value: number) {
+  return Number.isInteger(value) ? String(value) : "";
 }
 
 function rolePresentation(message: AuditSessionMessage) {
@@ -69,6 +73,275 @@ function renderMarkdown(content: string) {
   return { __html: marked.parse(content || "") as string };
 }
 
+const LONG_USER_MESSAGE_CHAR_LIMIT = 900;
+const LONG_USER_MESSAGE_LINE_LIMIT = 14;
+
+function isLongUserMessage(content: string) {
+  const text = (content || "").trim();
+  return text.length > LONG_USER_MESSAGE_CHAR_LIMIT || text.split(/\r?\n/).length > LONG_USER_MESSAGE_LINE_LIMIT;
+}
+
+function reasoningContentFrom(message: AuditSessionMessage) {
+  const payload = message.payload || {};
+  const value = payload.reasoning_content || payload.reasoning || payload.thought;
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function isThinkingPlaceholder(message: AuditSessionMessage) {
+  return message.metadata?.kind === "audit_chat_thinking_placeholder";
+}
+
+function isEmptyAssistantWithoutVisibleContent(message: AuditSessionMessage) {
+  return (
+    message.role === "assistant" &&
+    !message.content.trim() &&
+    !reasoningContentFrom(message) &&
+    !isThinkingPlaceholder(message)
+  );
+}
+
+type ToolInvocation = {
+  id: string;
+  toolName: string;
+  commandText: string;
+  inputText: string;
+  resultText: string;
+  status?: string;
+  durationMs?: number | null;
+  useMessage?: AuditSessionMessage;
+  resultMessage?: AuditSessionMessage;
+};
+
+type TimelineRenderItem =
+  | { type: "message"; message: AuditSessionMessage }
+  | { type: "tool_group"; id: string; messages: AuditSessionMessage[]; invocations: ToolInvocation[] };
+
+function isToolTimelineMessage(message: AuditSessionMessage) {
+  if (message.role === "tool_use" || message.role === "tool_result") {
+    return true;
+  }
+  if (message.role === "system") {
+    const content = (message.content || "").trim();
+    return message.name === "tool_progress" || /^Starting\s+\S+/.test(content) || /^Completed\s+\S+/.test(content);
+  }
+  return false;
+}
+
+function prettyJson(value: unknown) {
+  if (value === null || value === undefined || value === "") {
+    return "";
+  }
+  if (typeof value === "string") {
+    return value;
+  }
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch {
+    return String(value);
+  }
+}
+
+function compactText(value: string, max = 180) {
+  const normalized = value.replace(/\s+/g, " ").trim();
+  return normalized.length > max ? `${normalized.slice(0, max - 1)}…` : normalized;
+}
+
+function toolNameFrom(message: AuditSessionMessage) {
+  return String(message.payload?.tool_name || message.name || message.content || "Tool");
+}
+
+function commandFromInput(toolName: string, input: Record<string, unknown>) {
+  const name = toolName.toLowerCase();
+  if (typeof input.command === "string" && input.command.trim()) {
+    return input.command.trim();
+  }
+  if (name === "read") {
+    const path = input.file_path || input.path || input.file || input.file_paths;
+    const range = input.start_line || input.end_line ? `:${input.start_line || 1}-${input.end_line || "end"}` : "";
+    return `Read ${prettyJson(path)}${range}`;
+  }
+  if (name === "grep") {
+    return `Grep ${prettyJson(input.pattern || input.query || input.keyword)}${input.path ? ` in ${input.path}` : ""}`;
+  }
+  if (name === "glob") {
+    return `Glob ${prettyJson(input.pattern || input.glob || "*")}${input.path ? ` in ${input.path}` : ""}`;
+  }
+  if (name === "write") {
+    return `Write ${prettyJson(input.path)}`;
+  }
+  if (name === "skill") {
+    return `Skill ${prettyJson(input.skill_ref || input.skill || input.name || "")}${input.action ? ` ${input.action}` : ""}`;
+  }
+  return prettyJson(input) || toolName;
+}
+
+function buildTimelineItems(messages: AuditSessionMessage[]): TimelineRenderItem[] {
+  const items: TimelineRenderItem[] = [];
+  let group: AuditSessionMessage[] = [];
+
+  const flushGroup = () => {
+    if (group.length === 0) return;
+    const first = group[0];
+    const last = group[group.length - 1];
+    items.push({
+      type: "tool_group",
+      id: `tool-group-${first.id}-${last.id}`,
+      messages: group,
+      invocations: buildToolInvocations(group),
+    });
+    group = [];
+  };
+
+  for (const message of messages) {
+    if (isEmptyAssistantWithoutVisibleContent(message)) {
+      flushGroup();
+      continue;
+    }
+    if (isToolTimelineMessage(message)) {
+      group.push(message);
+      continue;
+    }
+    flushGroup();
+    items.push({ type: "message", message });
+  }
+  flushGroup();
+  return items;
+}
+
+function buildToolInvocations(messages: AuditSessionMessage[]) {
+  const invocations: ToolInvocation[] = [];
+  const byToolUseId = new Map<string, ToolInvocation>();
+
+  for (const message of messages) {
+    if (message.role === "tool_use") {
+      const toolName = toolNameFrom(message);
+      const input = (message.payload?.input || {}) as Record<string, unknown>;
+      const toolUseId = String(message.payload?.tool_use_id || message.id);
+      const invocation: ToolInvocation = {
+        id: toolUseId,
+        toolName,
+        commandText: commandFromInput(toolName, input),
+        inputText: prettyJson(input),
+        resultText: "",
+        useMessage: message,
+      };
+      invocations.push(invocation);
+      byToolUseId.set(toolUseId, invocation);
+      continue;
+    }
+
+    if (message.role === "tool_result") {
+      const toolUseId = String(message.payload?.tool_use_id || "");
+      const output = message.payload?.output;
+      const resultText = prettyJson(output) || message.content || "";
+      const existing = byToolUseId.get(toolUseId);
+      if (existing) {
+        existing.resultMessage = message;
+        existing.resultText = resultText;
+        existing.status = String(message.metadata?.status || "");
+        existing.durationMs = typeof message.metadata?.duration_ms === "number" ? message.metadata.duration_ms : null;
+      } else {
+        invocations.push({
+          id: message.id,
+          toolName: toolNameFrom(message),
+          commandText: message.name || toolUseId || "Tool result",
+          inputText: "",
+          resultText,
+          status: String(message.metadata?.status || ""),
+          durationMs: typeof message.metadata?.duration_ms === "number" ? message.metadata.duration_ms : null,
+          resultMessage: message,
+        });
+      }
+      continue;
+    }
+
+    invocations.push({
+      id: message.id,
+      toolName: message.name || "system",
+      commandText: message.content || "Tool progress",
+      inputText: "",
+      resultText: "",
+      status: "progress",
+      useMessage: message,
+    });
+  }
+
+  return invocations;
+}
+
+function ToolGroupBlock({
+  item,
+  groupOpen,
+  resultOpen,
+  onToggleGroup,
+  onToggleResult,
+}: {
+  item: Extract<TimelineRenderItem, { type: "tool_group" }>;
+  groupOpen: boolean;
+  resultOpen: Set<string>;
+  onToggleGroup: (id: string) => void;
+  onToggleResult: (id: string) => void;
+}) {
+  const toolCount = item.invocations.filter((entry) => entry.useMessage?.role === "tool_use").length || item.invocations.length;
+  const first = item.messages[0];
+  const last = item.messages[item.messages.length - 1];
+
+  return (
+    <div className="flex justify-start">
+      <div className="mr-auto w-full max-w-[88%] border-l border-[rgba(148,163,184,.35)] pl-4 text-slate-600">
+        <button
+          type="button"
+          onClick={() => onToggleGroup(item.id)}
+          className="group inline-flex max-w-full items-center gap-2 rounded-full px-1 py-1 text-left text-sm text-slate-500 transition hover:text-slate-800"
+        >
+          {groupOpen ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
+          <Terminal className="h-4 w-4" />
+          <span>已运行 {toolCount} 个工具</span>
+          <span className="truncate text-xs text-slate-400">{formatTimestamp(first?.created_at)} - {formatTimestamp(last?.created_at)}</span>
+        </button>
+
+        {groupOpen ? (
+          <div className="mt-2 space-y-2">
+            {item.invocations.map((invocation) => {
+              const open = resultOpen.has(invocation.id);
+              const hasResult = Boolean(invocation.resultText.trim());
+              return (
+                <div key={invocation.id} className="rounded-xl border border-slate-200/80 bg-white/72 px-3 py-2 shadow-sm">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500">
+                        <span className="rounded-md bg-slate-100 px-2 py-0.5 font-medium text-slate-700">{invocation.toolName}</span>
+                        {invocation.status ? <span>{invocation.status}</span> : null}
+                        {typeof invocation.durationMs === "number" ? <span>{invocation.durationMs}ms</span> : null}
+                      </div>
+                      <div className="mt-1 truncate font-mono text-xs text-slate-700">{compactText(invocation.commandText || invocation.inputText || invocation.resultText)}</div>
+                      {invocation.inputText ? (
+                        <pre className="mt-2 max-h-28 overflow-auto rounded-lg bg-slate-50 px-3 py-2 text-xs leading-5 text-slate-600">{invocation.inputText}</pre>
+                      ) : null}
+                    </div>
+                    {hasResult ? (
+                      <button
+                        type="button"
+                        onClick={() => onToggleResult(invocation.id)}
+                        className="shrink-0 rounded-full px-2 py-1 text-xs text-slate-500 transition hover:bg-slate-100 hover:text-slate-800"
+                      >
+                        {open ? "收起结果" : "查看结果"}
+                      </button>
+                    ) : null}
+                  </div>
+                  {open && hasResult ? (
+                    <pre className="mt-3 max-h-80 overflow-auto rounded-xl bg-[rgb(18,24,22)] p-4 text-xs leading-5 text-[rgb(231,243,236)]">{invocation.resultText}</pre>
+                  ) : null}
+                </div>
+              );
+            })}
+          </div>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
 export function AuditTimeline({
   messages,
   isStreaming,
@@ -84,7 +357,37 @@ export function AuditTimeline({
   onStopStreaming?: () => void;
   activeStreamingMessageId?: string | null;
 }) {
-  const renderedMessages = useMemo(() => messages, [messages]);
+  const renderedItems = useMemo(() => buildTimelineItems(messages), [messages]);
+  const [openToolGroups, setOpenToolGroups] = useState<Set<string>>(() => new Set());
+  const [openToolResults, setOpenToolResults] = useState<Set<string>>(() => new Set());
+  const [expandedLongMessages, setExpandedLongMessages] = useState<Set<string>>(() => new Set());
+
+  const toggleToolGroup = (id: string) => {
+    setOpenToolGroups((previous) => {
+      const next = new Set(previous);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const toggleToolResult = (id: string) => {
+    setOpenToolResults((previous) => {
+      const next = new Set(previous);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const toggleLongMessage = (id: string) => {
+    setExpandedLongMessages((previous) => {
+      const next = new Set(previous);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
 
   return (
     <Card className="overflow-hidden rounded-[30px] border border-[rgba(191,208,198,.72)] bg-[linear-gradient(180deg,rgba(255,255,255,.96),rgba(244,249,246,.96))] shadow-[0_28px_90px_rgba(84,110,93,.12)]">
@@ -116,7 +419,7 @@ export function AuditTimeline({
         <div className="relative">
           <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(rgba(99,125,108,.05)_1px,transparent_1px),linear-gradient(90deg,rgba(99,125,108,.05)_1px,transparent_1px)] bg-[size:28px_28px] opacity-50" />
           <div className="relative max-h-[72vh] space-y-5 overflow-y-auto px-5 py-6 sm:px-7">
-            {renderedMessages.length === 0 ? (
+            {renderedItems.length === 0 ? (
               <div className="flex min-h-[320px] items-center justify-center">
                 <div className="max-w-md rounded-[28px] border border-dashed border-[rgba(154,180,163,.45)] bg-white/70 px-8 py-10 text-center shadow-[0_20px_50px_rgba(120,146,126,.07)]">
                   <Bot className="mx-auto mb-4 h-10 w-10 text-[rgba(94,122,99,.85)]" />
@@ -125,13 +428,30 @@ export function AuditTimeline({
                 </div>
               </div>
             ) : (
-              renderedMessages.map((message) => {
+              renderedItems.map((item) => {
+                if (item.type === "tool_group") {
+                  return (
+                    <ToolGroupBlock
+                      key={item.id}
+                      item={item}
+                      groupOpen={openToolGroups.has(item.id)}
+                      resultOpen={openToolResults}
+                      onToggleGroup={toggleToolGroup}
+                      onToggleResult={toggleToolResult}
+                    />
+                  );
+                }
+                const message = item.message;
                 const presentation = rolePresentation(message);
                 const Icon = presentation.icon;
                 const isActiveStreamingAssistant = Boolean(
                   isStreaming && message.id === activeStreamingMessageId && message.role === "assistant",
                 );
-                const emptyStreaming = isActiveStreamingAssistant && !message.content.trim();
+                const reasoningContent = reasoningContentFrom(message);
+                const emptyStreaming = isActiveStreamingAssistant && !message.content.trim() && !reasoningContent;
+                const shouldCollapseLongMessage = message.role === "user" && isLongUserMessage(message.content);
+                const longMessageExpanded = expandedLongMessages.has(message.id);
+                const longMessageCollapsed = shouldCollapseLongMessage && !longMessageExpanded;
 
                 return (
                   <div key={message.id} className={`flex ${presentation.align}`}>
@@ -142,7 +462,9 @@ export function AuditTimeline({
                             <Icon className="h-4 w-4" />
                           </span>
                           <span>{presentation.label}</span>
-                          <span className="rounded-full bg-white/80 px-2 py-1 text-[11px] text-slate-400">#{message.sequence}</span>
+                          {formatSequence(message.sequence) ? (
+                            <span className="rounded-full bg-white/80 px-2 py-1 text-[11px] text-slate-400">#{formatSequence(message.sequence)}</span>
+                          ) : null}
                         </div>
                         <span className="text-[11px] text-slate-400">{formatTimestamp(message.created_at)}</span>
                       </div>
@@ -155,10 +477,38 @@ export function AuditTimeline({
                         </div>
                       ) : (
                         <div className="relative">
-                          <div
-                            className="audit-markdown max-w-none whitespace-pre-wrap break-words text-[15px] leading-7 text-slate-800 [&_a]:text-[rgb(56,118,92)] [&_a]:underline [&_blockquote]:border-l-4 [&_blockquote]:border-[rgba(126,154,135,.4)] [&_blockquote]:pl-4 [&_code]:rounded-md [&_code]:bg-[rgba(27,31,35,.06)] [&_code]:px-1.5 [&_code]:py-0.5 [&_pre]:overflow-x-auto [&_pre]:rounded-2xl [&_pre]:bg-[rgb(18,24,22)] [&_pre]:p-4 [&_pre]:text-[rgb(231,243,236)] [&_pre_code]:bg-transparent [&_pre_code]:p-0 [&_table]:w-full [&_table]:border-collapse [&_td]:border [&_td]:border-[rgba(187,200,193,.7)] [&_td]:px-3 [&_td]:py-2 [&_th]:border [&_th]:border-[rgba(187,200,193,.7)] [&_th]:bg-[rgba(239,246,241,.9)] [&_th]:px-3 [&_th]:py-2 [&_ul]:list-disc [&_ul]:pl-6 [&_ol]:list-decimal [&_ol]:pl-6"
-                            dangerouslySetInnerHTML={renderMarkdown(message.content)}
-                          />
+                          {reasoningContent ? (
+                            <details
+                              defaultOpen
+                              className="mb-3 rounded-2xl border border-[rgba(154,180,163,.28)] bg-[rgba(246,250,247,.82)] px-4 py-3 text-sm text-slate-600"
+                            >
+                              <summary className="cursor-pointer select-none font-medium text-[#5E7A63]">
+                                {isActiveStreamingAssistant ? "正在思考" : "模型思考"}
+                              </summary>
+                              <div className="mt-2 whitespace-pre-wrap break-words font-mono text-xs leading-5 text-slate-500">
+                                {reasoningContent}
+                              </div>
+                            </details>
+                          ) : null}
+                          <div className={`relative ${longMessageCollapsed ? "max-h-[360px] overflow-hidden" : ""}`}>
+                            <div
+                              className="audit-markdown max-w-none whitespace-pre-wrap break-words text-[15px] leading-7 text-slate-800 [&_a]:text-[rgb(56,118,92)] [&_a]:underline [&_blockquote]:border-l-4 [&_blockquote]:border-[rgba(126,154,135,.4)] [&_blockquote]:pl-4 [&_code]:rounded-md [&_code]:bg-[rgba(27,31,35,.06)] [&_code]:px-1.5 [&_code]:py-0.5 [&_pre]:overflow-x-auto [&_pre]:rounded-2xl [&_pre]:bg-[rgb(18,24,22)] [&_pre]:p-4 [&_pre]:text-[rgb(231,243,236)] [&_pre_code]:bg-transparent [&_pre_code]:p-0 [&_table]:w-full [&_table]:border-collapse [&_td]:border [&_td]:border-[rgba(187,200,193,.7)] [&_td]:px-3 [&_td]:py-2 [&_th]:border [&_th]:border-[rgba(187,200,193,.7)] [&_th]:bg-[rgba(239,246,241,.9)] [&_th]:px-3 [&_th]:py-2 [&_ul]:list-disc [&_ul]:pl-6 [&_ol]:list-decimal [&_ol]:pl-6"
+                              dangerouslySetInnerHTML={renderMarkdown(message.content)}
+                            />
+                            {longMessageCollapsed ? (
+                              <div className="pointer-events-none absolute inset-x-0 bottom-0 h-16 bg-gradient-to-t from-[rgba(229,242,232,.98)] to-transparent" />
+                            ) : null}
+                          </div>
+                          {shouldCollapseLongMessage ? (
+                            <button
+                              type="button"
+                              onClick={() => toggleLongMessage(message.id)}
+                              className="mt-3 inline-flex items-center gap-1.5 rounded-full px-1 py-1 text-sm font-medium text-[#5E7A63] transition hover:text-[#3f5e45]"
+                            >
+                              {longMessageExpanded ? "收起" : "显示更多"}
+                              {longMessageExpanded ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+                            </button>
+                          ) : null}
                           {isActiveStreamingAssistant ? (
                             <span className="ml-1 inline-flex h-6 w-[3px] animate-pulse rounded-full bg-[linear-gradient(180deg,#5E7A63,#9ECB97)] align-middle shadow-[0_0_12px_rgba(94,122,99,.45)]" />
                           ) : null}
