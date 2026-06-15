@@ -63,10 +63,10 @@ export default function Register() {
             <div className="space-y-10">
               <div className="flex items-center gap-4">
                 <div className="flex h-16 w-16 items-center justify-center rounded-[22px] border border-slate-200/80 bg-white/85 shadow-[0_14px_36px_rgba(92,104,120,0.08)]">
-                  <img src="/auditai_icon.svg" alt="AuditAI" className="h-11 w-11 object-contain" />
+                  <img src="/autocve_icon.svg" alt="AutoCVE" className="h-11 w-11 object-contain" />
                 </div>
                 <div>
-                  <div className="text-3xl font-semibold tracking-[-0.05em] text-slate-900">AuditAI</div>
+                  <div className="text-3xl font-semibold tracking-[-0.05em] text-slate-900">AutoCVE</div>
                   <p className="mt-1 text-sm text-slate-500">Create Your Workspace</p>
                 </div>
               </div>
@@ -111,9 +111,9 @@ export default function Register() {
           <div className="w-full max-w-[520px]">
             <div className="mb-8 text-center lg:hidden">
               <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-[24px] border border-slate-200/80 bg-white/90 shadow-[0_14px_36px_rgba(92,104,120,0.08)]">
-                <img src="/auditai_icon.svg" alt="AuditAI" className="h-11 w-11 object-contain" />
+                <img src="/autocve_icon.svg" alt="AutoCVE" className="h-11 w-11 object-contain" />
               </div>
-              <h1 className="text-3xl font-semibold tracking-[-0.05em] text-slate-900">{"\u521b\u5efa AuditAI \u8d26\u53f7"}</h1>
+              <h1 className="text-3xl font-semibold tracking-[-0.05em] text-slate-900">{"\u521b\u5efa AutoCVE \u8d26\u53f7"}</h1>
               <p className="mt-2 text-sm text-slate-500">{"\u521b\u5efa\u65b0\u7684\u5ba1\u8ba1\u5de5\u4f5c\u533a"}</p>
             </div>
 
@@ -122,7 +122,7 @@ export default function Register() {
                 <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-400">Start Here</p>
                 <div className="flex items-center justify-between gap-3">
                   <div>
-                    <h2 className="text-[2rem] font-semibold tracking-[-0.05em] text-slate-900">{"\u6ce8\u518c AuditAI"}</h2>
+                    <h2 className="text-[2rem] font-semibold tracking-[-0.05em] text-slate-900">{"\u6ce8\u518c AutoCVE"}</h2>
                     <p className="mt-2 text-sm text-slate-500">{"\u586b\u5199\u57fa\u7840\u4fe1\u606f\u540e\u5373\u53ef\u521b\u5efa\u65b0\u7684\u5ba1\u8ba1\u5de5\u4f5c\u533a\u3002"}</p>
                   </div>
                   <div className="hidden h-12 w-12 items-center justify-center rounded-2xl bg-[rgba(223,235,225,0.8)] text-[hsl(var(--primary))] sm:flex">

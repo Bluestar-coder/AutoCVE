@@ -41,7 +41,7 @@ class ReportGenerator:
                     vertical-align: middle;
                 }
                 @top-right {
-                    content: "AuditAI Audit Report";
+                    content: "AuditAutoCVE Report";
                     font-size: 8pt;
                     color: #666;
                     font-family: sans-serif;

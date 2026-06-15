@@ -80,10 +80,10 @@ export default function Sidebar({ collapsed, setCollapsed }: SidebarProps) {
               className={`group flex items-center gap-3 ${collapsed ? 'justify-center' : ''}`}
               onClick={() => setMobileOpen(false)}
             >
-              <img src="/auditai_icon.svg" alt="AuditAI" className="h-12 w-12 object-contain" />
+              <img src="/autocve_icon.svg" alt="AutoCVE" className="h-12 w-12 object-contain" />
               {!collapsed && (
                 <div className="min-w-0">
-                  <div className="text-[1.35rem] font-semibold tracking-[-0.03em] text-slate-900">AI Audit</div>
+                  <div className="text-[1.35rem] font-semibold tracking-[-0.03em] text-slate-900">AutoCVE</div>
                 </div>
               )}
             </Link>

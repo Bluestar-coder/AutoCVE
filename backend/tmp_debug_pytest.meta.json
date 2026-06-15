@@ -1,8 +1,8 @@
 ﻿{
     "Id":  41712,
-    "Path":  "D:\\文件\\pythonProject\\AICVE\\AutoCVE\\AuditAI-1.0.0\\.worktrees\\runtime-alignment-gap-analysis\\backend\\.venv\\Scripts\\pytest.exe",
+    "Path":  "D:\\文件\\pythonProject\\AICVE\\AutoCVE\\AutoCVE-1.0.0\\.worktrees\\runtime-alignment-gap-analysis\\backend\\.venv\\Scripts\\pytest.exe",
     "StartTime":  "2026-04-14T17:35:59.7095255+08:00",
-    "Out":  "D:\\文件\\pythonProject\\AICVE\\AutoCVE\\AuditAI-1.0.0\\.worktrees\\runtime-alignment-gap-analysis\\backend\\tmp_debug_pytest.out.log",
-    "Err":  "D:\\文件\\pythonProject\\AICVE\\AutoCVE\\AuditAI-1.0.0\\.worktrees\\runtime-alignment-gap-analysis\\backend\\tmp_debug_pytest.err.log",
-    "WorkingDirectory":  "D:\\文件\\pythonProject\\AICVE\\AutoCVE\\AuditAI-1.0.0\\.worktrees\\runtime-alignment-gap-analysis\\backend"
+    "Out":  "D:\\文件\\pythonProject\\AICVE\\AutoCVE\\AutoCVE-1.0.0\\.worktrees\\runtime-alignment-gap-analysis\\backend\\tmp_debug_pytest.out.log",
+    "Err":  "D:\\文件\\pythonProject\\AICVE\\AutoCVE\\AutoCVE-1.0.0\\.worktrees\\runtime-alignment-gap-analysis\\backend\\tmp_debug_pytest.err.log",
+    "WorkingDirectory":  "D:\\文件\\pythonProject\\AICVE\\AutoCVE\\AutoCVE-1.0.0\\.worktrees\\runtime-alignment-gap-analysis\\backend"
 }

@@ -4,7 +4,7 @@ const fs = require('fs');
 const path = require('path');
 const { execSync } = require('child_process');
 
-console.log('🚀 AuditAI 项目设置开始...');
+console.log('🚀 AutoCVE 项目设置开始...');
 
 // 检查 Node.js 版本
 function checkNodeVersion() {

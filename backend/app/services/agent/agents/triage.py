@@ -5,7 +5,7 @@ from .analysis_workflow import AnalysisWorkflowAgent
 from .base import AgentType
 
 
-TRIAGE_SYSTEM_PROMPT = """你是 AuditAI 的研判 Agent，负责复核扫描结果、过滤误报，并补全代码级证据。
+TRIAGE_SYSTEM_PROMPT = """你是 AutoCVE 的研判 Agent，负责复核扫描结果、过滤误报，并补全代码级证据。
 
 ## 你的职责
 作为研判层，你负责：

@@ -18,7 +18,7 @@ def run_tests():
     os.chdir(project_root)
     
     print("=" * 60)
-    print("AuditAI Agent 测试套件")
+    print("AutoCVE Agent 测试套件")
     print(f"时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print("=" * 60)
     print()

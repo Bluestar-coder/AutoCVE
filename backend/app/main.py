@@ -55,7 +55,7 @@ async def lifespan(app: FastAPI):
     应用生命周期管理
     启动时初始化数据库（创建默认账户等）
     """
-    logger.info("AuditAI 后端服务启动中...")
+    logger.info("AutoCVE 后端服务启动中...")
 
     # 初始化数据库（创建默认账户）
     # 注意：需要先运行 alembic upgrade head 创建表结构
@@ -85,7 +85,7 @@ async def lifespan(app: FastAPI):
         logger.info("  - Agent 核心服务检查通过")
 
     logger.info("=" * 50)
-    logger.info("AuditAI 后端服务已启动")
+    logger.info("AutoCVE 后端服务已启动")
     logger.info(f"API 文档: http://localhost:8000/docs")
     logger.info("=" * 50)
     logger.info("演示账户: demo@example.com / demo123")
@@ -93,7 +93,7 @@ async def lifespan(app: FastAPI):
 
     yield
 
-    logger.info("AuditAI 后端服务已关闭")
+    logger.info("AutoCVE 后端服务已关闭")
 
 
 app = FastAPI(
@@ -122,7 +122,7 @@ async def health_check():
 @app.get("/")
 async def root():
     return {
-        "message": "Welcome to AuditAI API",
+        "message": "Welcome to AutoCVE API",
         "docs": "/docs",
         "demo_account": {
             "email": "demo@example.com",

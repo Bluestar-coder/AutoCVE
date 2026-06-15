@@ -18,7 +18,7 @@ import {
   Star,
   Target,
 } from "lucide-react";
-import { Link } from "react-router-dom";
+import { Link, useLocation, useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 
 import { Badge } from "@/components/ui/badge";
@@ -128,6 +128,8 @@ function vulnerabilityLink(project: OneClickCveProject) {
 }
 
 export default function OneClickCVE() {
+  const location = useLocation();
+  const navigate = useNavigate();
   const [dialogOpen, setDialogOpen] = useState(false);
   const [targetCount, setTargetCount] = useState("5");
   const [targetCountError, setTargetCountError] = useState("");
@@ -229,6 +231,13 @@ export default function OneClickCVE() {
     loadBatches();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  useEffect(() => {
+    const searchParams = new URLSearchParams(location.search);
+    if (searchParams.get("start") !== "1") return;
+    setDialogOpen(true);
+    navigate(location.pathname, { replace: true });
+  }, [location.pathname, location.search, navigate]);
 
   useEffect(() => {
     if (!active || !selectedBatchId) return;

@@ -1,11 +1,11 @@
 #!/bin/bash
 
-# AuditAI 项目设置脚本
+# AutoCVE 项目设置脚本
 # 用于快速设置开发环境
 
 set -e
 
-echo "🚀 AuditAI 项目设置开始..."
+echo "🚀 AutoCVE 项目设置开始..."
 
 # 检查 Node.js 版本
 echo "📋 检查 Node.js 版本..."

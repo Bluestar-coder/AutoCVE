@@ -95,9 +95,9 @@ export const API_ENDPOINTS = {
 
 // 本地存储键名
 export const STORAGE_KEYS = {
-  THEME: 'auditai-theme',
-  USER_PREFERENCES: 'auditai-preferences',
-  RECENT_PROJECTS: 'auditai-recent-projects',
+  THEME: 'autocve-theme',
+  USER_PREFERENCES: 'autocve-preferences',
+  RECENT_PROJECTS: 'autocve-recent-projects',
 } as const;
 
 // 导出项目类型相关常量

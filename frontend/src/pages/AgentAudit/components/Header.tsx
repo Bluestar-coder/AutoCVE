@@ -45,7 +45,7 @@ export function Header({
           </div>
           <div className="flex items-center">
             <span className="font-bold text-foreground tracking-[-0.03em] text-base leading-tight">
-              AIAudit
+              AutoCVE
             </span>
           </div>
         </div>

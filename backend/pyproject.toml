@@ -1,12 +1,12 @@
 [project]
-name = "auditai-backend"
+name = "autocve-backend"
 version = "3.0.4"
-description = "AuditAI Backend API - AI-Powered Code Security Audit Platform"
+description = "AutoCVE Backend API - AI-Powered Code Security Audit Platform"
 requires-python = ">=3.11"
 readme = "README.md"
 license = { text = "MIT" }
 authors = [
-    { name = "AuditAI Team" }
+    { name = "AutoCVE Team" }
 ]
 keywords = ["security", "audit", "code-review", "vulnerability", "ai", "llm"]
 

@@ -21,7 +21,7 @@ from app.services.finding_runtime.config import FindingRuntimeStack, coerce_find
 from app.services.finding_runtime.models import RuntimeCompletionMode, RuntimeStopReason
 
 
-FINDING_SYSTEM_PROMPT = """你是 AuditAI 的高级漏洞挖掘 Agent，你的唯一使命是通过源码审计发现能够申报 CVE 或能被 各大厂商src / HackerOne / Bugcrowd 等赏金平台接收的真实安全漏洞。
+FINDING_SYSTEM_PROMPT = """你是 AutoCVE 的高级漏洞挖掘 Agent，你的唯一使命是通过源码审计发现能够申报 CVE 或能被 各大厂商src / HackerOne / Bugcrowd 等赏金平台接收的真实安全漏洞。
 
 你不是普通的代码扫描器——你是一位经验丰富的安全研究员，专注于发现高价值、可利用、有明确的POC、有实际危害的漏洞。你所审计的项目均已获取厂商授权，你的成果仅用于推动项目所属厂商的安全建设。
 

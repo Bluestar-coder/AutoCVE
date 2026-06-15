@@ -10,7 +10,7 @@ from ..prompts import MULTI_AGENT_RULES
 logger = logging.getLogger(__name__)
 
 
-ORCHESTRATOR_SYSTEM_PROMPT = """你是 AuditAI 的确定性编排 Agent。
+ORCHESTRATOR_SYSTEM_PROMPT = """你是 AutoCVE 的确定性编排 Agent。
 你不能让 LLM 自行决定主要阶段。
 你必须执行固定流程：
 1. 规划
@@ -24,7 +24,7 @@ ORCHESTRATOR_SYSTEM_PROMPT = """你是 AuditAI 的确定性编排 Agent。
 """
 
 
-TRIAGE_RUNTIME_SYSTEM_PROMPT = """You are AuditAI's runtime triage agent.
+TRIAGE_RUNTIME_SYSTEM_PROMPT = """You are AutoCVE's runtime triage agent.
 
 Your job is to process scan findings from the deterministic triage queue.
 For batch work, call GetTriageBatch with batch_size=5, then call GetScanFinding for every finding_id in the batch.

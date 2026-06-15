@@ -271,7 +271,7 @@ wheels = [
 ]
 
 [[package]]
-name = "auditai-backend"
+name = "autocve-backend"
 version = "3.0.4"
 source = { editable = "." }
 dependencies = [

@@ -9,7 +9,7 @@ DEFAULT_MANAGED_PROJECTS_ROOT = str(Path(__file__).resolve().parents[3] / "proje
 
 
 class Settings(BaseSettings):
-    PROJECT_NAME: str = "AuditAI"
+    PROJECT_NAME: str = "AutoCVE"
     API_V1_STR: str = "/api/v1"
 
     SECRET_KEY: str = "changethis_in_production_to_a_long_random_string"
@@ -29,7 +29,7 @@ class Settings(BaseSettings):
     POSTGRES_SERVER: str = "db"
     POSTGRES_USER: str = "postgres"
     POSTGRES_PASSWORD: str = "postgres"
-    POSTGRES_DB: str = "auditai"
+    POSTGRES_DB: str = "autocve"
     DATABASE_URL: str | None = None
 
     @validator("DATABASE_URL", pre=True)
@@ -100,7 +100,7 @@ class Settings(BaseSettings):
     CHECKMARX_WORKFLOW_ENABLED: bool = True
     WORKFLOW_URL: Optional[str] = None
     WORKFLOW_API_TOKEN: Optional[str] = None
-    WORKFLOW_USER: str = "auditai"
+    WORKFLOW_USER: str = "autocve"
     WORKFLOW_TIMEOUT: float = 300.0
 
     EMBEDDING_PROVIDER: str = "openai"
@@ -118,7 +118,7 @@ class Settings(BaseSettings):
     AGENT_TOKEN_BUDGET: int = 100000
     AGENT_TIMEOUT_SECONDS: int = 1800
     FINDING_RUNTIME_STACK_DEFAULT: str = "runtime"
-    SANDBOX_IMAGE: str = "auditai-sandbox:latest"
+    SANDBOX_IMAGE: str = "autocve-sandbox:latest"
     SANDBOX_MEMORY_LIMIT: str = "512m"
     SANDBOX_CPU_LIMIT: float = 1.0
     SANDBOX_TIMEOUT: int = 60

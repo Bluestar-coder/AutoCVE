@@ -6,7 +6,7 @@ import { ArrowLeft, Compass } from "lucide-react";
 export default function NotFound() {
   return (
     <>
-      <PageMeta title="页面未找到" description="AuditAI 页面未找到" />
+      <PageMeta title="页面未找到" description="AutoCVE 页面未找到" />
       <div className="min-h-screen gradient-bg p-4 md:p-6">
         <div className="mx-auto flex min-h-[calc(100vh-2rem)] max-w-5xl items-center justify-center rounded-[40px] border border-white/70 bg-white/55 p-6 shadow-[0_28px_80px_rgba(88,97,110,0.12)] backdrop-blur-xl sm:p-10">
           <div className="w-full max-w-3xl rounded-[34px] border border-slate-200/70 bg-white/80 p-8 text-center shadow-[0_20px_55px_rgba(88,97,110,0.10)] sm:p-12">
@@ -17,7 +17,7 @@ export default function NotFound() {
             <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">404 Error</p>
             <h1 className="mt-3 text-5xl font-semibold tracking-[-0.05em] text-slate-900 sm:text-6xl">页面未找到</h1>
             <p className="mx-auto mt-4 max-w-xl text-base text-slate-500">
-              你访问的页面可能已被移动、删除，或者链接地址有误。返回 AuditAI 首页继续操作会更快。
+              你访问的页面可能已被移动、删除，或者链接地址有误。返回 AutoCVE 首页继续操作会更快。
             </p>
 
             <div className="mt-8 grid gap-4 sm:grid-cols-2">
@@ -32,7 +32,7 @@ export default function NotFound() {
               <div className="rounded-[24px] bg-[rgba(212,222,229,0.72)] p-5 text-left">
                 <p className="text-sm font-semibold text-slate-900">当前品牌</p>
                 <p className="mt-3 text-sm text-slate-600">
-                  AuditAI 已启用新的浅灰工作台界面，你可以直接返回首页继续使用核心审计功能。
+                  AutoCVE 已启用新的浅灰工作台界面，你可以直接返回首页继续使用核心审计功能。
                 </p>
               </div>
             </div>
@@ -44,7 +44,7 @@ export default function NotFound() {
               </Button>
             </Link>
 
-            <p className="mt-8 text-sm text-slate-400">&copy; {new Date().getFullYear()} AuditAI</p>
+            <p className="mt-8 text-sm text-slate-400">&copy; {new Date().getFullYear()} AutoCVE</p>
           </div>
         </div>
       </div>

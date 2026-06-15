@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 
-echo "🚀 AuditAI 后端启动中..."
+echo "🚀 AutoCVE 后端启动中..."
 
 # 等待 PostgreSQL 就绪
 echo "⏳ 等待数据库连接..."

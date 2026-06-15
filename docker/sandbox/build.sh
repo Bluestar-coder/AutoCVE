@@ -4,7 +4,7 @@
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-IMAGE_NAME="auditai-sandbox"
+IMAGE_NAME="autocve-sandbox"
 IMAGE_TAG="latest"
 SEMGREP_VERSION="${SEMGREP_VERSION:-1.161.0}"
 

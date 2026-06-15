@@ -416,7 +416,7 @@ class BashRuntimeTool(RuntimeTool):
         if not str(parsed_input.command or "").strip():
             return ToolPermissionDecision(allowed=False, reason="Bash requires a non-empty command")
         if parsed_input.run_in_background:
-            return ToolPermissionDecision(allowed=False, reason="Background shell execution is not implemented in AuditAI runtime yet")
+            return ToolPermissionDecision(allowed=False, reason="Background shell execution is not implemented in AutoCVE runtime yet")
         if parsed_input.dangerously_disable_sandbox:
             return ToolPermissionDecision(allowed=False, reason="Disabling sandbox execution is not supported by the runtime Bash tool")
         if self._executable is None and self._backend_tool is None:
@@ -522,7 +522,7 @@ class PowerShellRuntimeTool(RuntimeTool):
         if not str(parsed_input.command or "").strip():
             return ToolPermissionDecision(allowed=False, reason="PowerShell requires a non-empty command")
         if parsed_input.run_in_background:
-            return ToolPermissionDecision(allowed=False, reason="Background shell execution is not implemented in AuditAI runtime yet")
+            return ToolPermissionDecision(allowed=False, reason="Background shell execution is not implemented in AutoCVE runtime yet")
         if parsed_input.dangerously_disable_sandbox:
             return ToolPermissionDecision(allowed=False, reason="Disabling sandbox execution is not supported by the runtime PowerShell tool")
         if self._executable is None and self._backend_tool is None:

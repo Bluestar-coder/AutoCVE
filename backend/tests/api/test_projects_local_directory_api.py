@@ -171,7 +171,7 @@ async def test_create_github_project_uses_remote_default_branch(monkeypatch):
     async def fake_prepare_project_workspace(*, project: Project, db, user_id: str, refresh: bool = False):
         del db, user_id
         prepared_workspaces.append((project.id, project.default_branch, refresh))
-        return f"/tmp/auditai-workspaces/{project.id}"
+        return f"/tmp/autocve-workspaces/{project.id}"
 
     monkeypatch.setattr(projects_endpoint, "_prepare_project_workspace", fake_prepare_project_workspace)
 

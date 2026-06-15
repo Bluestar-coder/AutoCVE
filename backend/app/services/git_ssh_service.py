@@ -375,7 +375,7 @@ class GitSSHOperations:
             # 使用持久化的known_hosts文件
             known_hosts_file = get_known_hosts_file()
 
-            # 设置Git SSH命令，只使用AuditAI生成的SSH密钥
+            # 设置Git SSH命令，只使用AutoCVE生成的SSH密钥
             env = os.environ.copy()
 
             # 构建SSH命令（使用 shlex.quote 转义路径防止命令注入）

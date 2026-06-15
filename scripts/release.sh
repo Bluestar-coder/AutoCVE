@@ -122,7 +122,7 @@ fi
 # 更新 docker-compose.yml 中的版本注释
 print_info "更新 docker-compose.yml 版本注释..."
 if [ -f "docker-compose.yml" ]; then
-    sed -i.bak "s/AuditAI v[0-9]*\.[0-9]*\.[0-9]*/AuditAI v$NEW_VERSION/" docker-compose.yml
+    sed -i.bak "s/AutoCVE v[0-9]*\.[0-9]*\.[0-9]*/AutoCVE v$NEW_VERSION/" docker-compose.yml
     rm -f docker-compose.yml.bak
 fi
 

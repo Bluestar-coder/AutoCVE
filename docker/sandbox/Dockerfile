@@ -1,10 +1,11 @@
-# AuditAI Agent Sandbox
+# AutoCVE Agent Sandbox
 # 安全沙箱环境用于漏洞验证和 PoC 执行
 # 集成各类安全扫描工具 (Semgrep, Bandit, Gitleaks, etc.)
 
 FROM docker.m.daocloud.io/python:3.11-bookworm
 
 ARG SEMGREP_VERSION=1.161.0
+ARG PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/
 
 LABEL maintainer="XCodeReviewer Team"
 LABEL description="Secure sandbox environment for vulnerability verification and security scanning"
@@ -64,20 +65,22 @@ RUN rustc --version && cargo --version
 
 # 安装 Python 安全工具
 RUN unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY && \
-    pip install --no-cache-dir -i https://pypi.tuna.tsinghua.edu.cn/simple \
-    requests \
-    httpx \
-    aiohttp \
-    beautifulsoup4 \
-    lxml \
-    pycryptodome \
-    paramiko \
-    pyjwt \
-    python-jose \
-    sqlparse \
-    "semgrep==${SEMGREP_VERSION}" \
-    bandit \
-    safety && \
+    for index_url in "${PIP_INDEX_URL}" "https://pypi.org/simple"; do \
+      python -m pip install --no-cache-dir -i "${index_url}" \
+      requests \
+      httpx \
+      aiohttp \
+      beautifulsoup4 \
+      lxml \
+      pycryptodome \
+      paramiko \
+      pyjwt \
+      python-jose \
+      sqlparse \
+      "semgrep==${SEMGREP_VERSION}" \
+      bandit \
+      safety && break; \
+    done && \
     semgrep --version && \
     test "$(semgrep --version)" = "${SEMGREP_VERSION}"
 

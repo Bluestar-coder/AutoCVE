@@ -1,4 +1,4 @@
-# AuditAI 最终漏洞报告
+# AutoCVE 最终漏洞报告
 
 ## 基本信息
 - 生成时间: {{ report.generated_at }}

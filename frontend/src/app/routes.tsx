@@ -7,6 +7,7 @@ import AuditSession from '@/pages/AuditSession';
 import AuditTasks from '@/pages/AuditTasks';
 import CheckmarxScan from '@/pages/CheckmarxScan';
 import Dashboard from '@/pages/Dashboard';
+import HomeCover from '@/pages/HomeCover';
 import OneClickCVE from '@/pages/OneClickCVE';
 import ProjectDetail from '@/pages/ProjectDetail';
 import Projects from '@/pages/Projects';
@@ -26,7 +27,7 @@ export interface RouteConfig {
 // const enableCheckmarxScan = import.meta.env.VITE_ENABLE_CHECKMARX_SCAN === 'true';
 const enableCheckmarxScan = false;
 const routes: RouteConfig[] = [
-  { name: '首页', labelKey: "routes.home", path: '/', element: <AgentAudit />, visible: true },
+  { name: '首页', labelKey: "routes.home", path: '/', element: <HomeCover />, visible: true },
   { name: 'Agent审计详情', labelKey: "routes.agentAuditDetail", path: '/agent-audit/:taskId', element: <AgentAudit />, visible: false },
   { name: '审计会话', labelKey: "routes.auditSession", path: '/audit-sessions/:sessionId', element: <AuditSession />, visible: false },
   { name: '仪表盘', labelKey: "routes.dashboard", path: '/dashboard', element: <Dashboard />, visible: true },

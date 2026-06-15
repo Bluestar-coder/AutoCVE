@@ -266,7 +266,7 @@ export default function Dashboard() {
               <div className="relative flex h-full flex-col justify-between gap-8">
                 <div className="space-y-4">
                   <span className="inline-flex w-fit items-center rounded-full border border-[#c7decf] bg-[#eaf4ed] px-3 py-1 text-xs font-semibold text-[hsl(var(--primary))]">
-                    AIAudit Workspace
+                    AutoCVE Workspace
                   </span>
                   <div className="space-y-2">
                     <h1 className="text-3xl font-semibold text-slate-900 md:text-4xl">{t("dashboard.title")}</h1>

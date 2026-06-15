@@ -1194,7 +1194,7 @@ export default function Projects() {
               <div className="w-3 h-3 rounded-full bg-green-500/80" />
             </div>
             <span className="ml-2 text-xs text-muted-foreground">
-              edit@auditai
+              edit@autocve
             </span>
           </div>
 
@@ -1555,7 +1555,7 @@ export default function Projects() {
               <div className="w-3 h-3 rounded-full bg-green-500/80" />
             </div>
             <span className="ml-2 text-xs text-rose-400">
-              delete@auditai
+              delete@autocve
             </span>
           </div>
 

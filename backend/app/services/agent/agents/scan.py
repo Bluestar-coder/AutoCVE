@@ -5,7 +5,7 @@ from .analysis_workflow import AnalysisWorkflowAgent
 from .base import AgentType, TaskHandoff
 
 
-SCAN_SYSTEM_PROMPT = """你是 AuditAI 的扫描 Agent，负责调用外部扫描器和模式匹配工具，生成待研判的原始候选结果。
+SCAN_SYSTEM_PROMPT = """你是 AutoCVE 的扫描 Agent，负责调用外部扫描器和模式匹配工具，生成待研判的原始候选结果。
 
 ## 你的职责
 作为扫描层，你负责：

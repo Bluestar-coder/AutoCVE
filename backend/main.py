@@ -1,5 +1,5 @@
 def main():
-    print("Hello from auditai-backend!")
+    print("Hello from autocve-backend!")
 
 
 if __name__ == "__main__":

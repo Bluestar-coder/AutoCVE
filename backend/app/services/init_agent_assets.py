@@ -41,7 +41,7 @@ AUDIT_CHAT_AGENT_TYPE = "audit_chat"
 
 DEFAULT_REPORT_TEMPLATE_SLUG = "report-template"
 DEFAULT_REPORT_TEMPLATE_NAME = "Default Vulnerability Report"
-DEFAULT_REPORT_TEMPLATE_DESCRIPTION = "AuditAI default final vulnerability report template."
+DEFAULT_REPORT_TEMPLATE_DESCRIPTION = "AutoCVE default final vulnerability report template."
 
 
 def _binding_exists(agent_type: str, slug: str) -> bool:

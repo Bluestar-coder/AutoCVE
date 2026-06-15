@@ -1,4 +1,4 @@
-# AuditAI Security Policy
+# AutoCVE Security Policy
 
 如果你发现安全问题，请通过私有渠道联系维护者，不要在公开页面直接披露可复现细节。
 

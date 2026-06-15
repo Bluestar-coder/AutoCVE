@@ -5,7 +5,7 @@ import { resources } from "./resources";
 
 export type SupportedLanguage = "zh" | "en";
 
-export const LANGUAGE_STORAGE_KEY = "auditai.language";
+export const LANGUAGE_STORAGE_KEY = "autocve.language";
 
 function isSupportedLanguage(value: string | null): value is SupportedLanguage {
   return value === "zh" || value === "en";

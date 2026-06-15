@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# AuditAI 安全工具一键安装脚本 (增强版)
+# AutoCVE 安全工具一键安装脚本 (增强版)
 # 自动安装沙盒和外部安全扫描工具
 #
 # 特性:
@@ -596,7 +596,7 @@ install_docker_sandbox() {
         create_sandbox_dockerfile "$sandbox_dir"
     fi
 
-    log_info "构建 AuditAI 沙盒镜像..."
+    log_info "构建 AutoCVE 沙盒镜像..."
 
     cd "$sandbox_dir"
 
@@ -604,15 +604,15 @@ install_docker_sandbox() {
     for attempt in $(seq 1 $MAX_RETRIES); do
         log_info "构建镜像 (尝试 $attempt/$MAX_RETRIES)..."
 
-        if docker build -t auditai-sandbox:latest -f Dockerfile . 2>&1; then
-            log_success "沙盒镜像构建成功: auditai-sandbox:latest"
+        if docker build -t autocve-sandbox:latest -f Dockerfile . 2>&1; then
+            log_success "沙盒镜像构建成功: autocve-sandbox:latest"
 
             # 验证
             log_info "验证沙盒镜像..."
-            if docker run --rm auditai-sandbox:latest python3 --version; then
+            if docker run --rm autocve-sandbox:latest python3 --version; then
                 log_success "Python 环境正常"
             fi
-            if docker run --rm auditai-sandbox:latest node --version 2>/dev/null; then
+            if docker run --rm autocve-sandbox:latest node --version 2>/dev/null; then
                 log_success "Node.js 环境正常"
             fi
 
@@ -631,7 +631,7 @@ create_sandbox_dockerfile() {
     local dir="$1"
 
     cat > "$dir/Dockerfile" << 'EOF'
-# AuditAI 安全沙盒
+# AutoCVE 安全沙盒
 FROM python:3.11-slim-bookworm
 
 # 安装基础工具
@@ -717,9 +717,9 @@ verify_installation() {
 
     # Docker 沙盒检查
     if command_exists docker && docker info &>/dev/null; then
-        if docker image inspect auditai-sandbox:latest &>/dev/null; then
+        if docker image inspect autocve-sandbox:latest &>/dev/null; then
             echo ""
-            log_success "Docker 沙盒镜像: auditai-sandbox:latest ✓"
+            log_success "Docker 沙盒镜像: autocve-sandbox:latest ✓"
         else
             echo ""
             log_warning "Docker 沙盒镜像未构建"
@@ -766,7 +766,7 @@ update_env_config() {
 # =============================================
 # 沙盒配置 (自动添加)
 # =============================================
-SANDBOX_IMAGE=auditai-sandbox:latest
+SANDBOX_IMAGE=autocve-sandbox:latest
 SANDBOX_MEMORY_LIMIT=512m
 SANDBOX_CPU_LIMIT=1.0
 SANDBOX_TIMEOUT=60
@@ -782,7 +782,7 @@ EOF
 
 show_help() {
     cat << 'EOF'
-AuditAI 安全工具一键安装脚本
+AutoCVE 安全工具一键安装脚本
 
 用法:
     ./setup_security_tools.sh [选项]
@@ -839,7 +839,7 @@ main() {
     echo ""
     echo -e "${BLUE}╔═══════════════════════════════════════════════════════════════╗${NC}"
     echo -e "${BLUE}║                                                               ║${NC}"
-    echo -e "${BLUE}║     🔐 AuditAI 安全工具一键安装脚本 (增强版)               ║${NC}"
+    echo -e "${BLUE}║     🔐 AutoCVE 安全工具一键安装脚本 (增强版)               ║${NC}"
     echo -e "${BLUE}║                                                               ║${NC}"
     echo -e "${BLUE}╚═══════════════════════════════════════════════════════════════╝${NC}"
     echo ""

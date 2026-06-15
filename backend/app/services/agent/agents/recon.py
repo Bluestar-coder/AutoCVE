@@ -32,7 +32,7 @@ LIVE_RECON_OUTPUT_CONTRACT = """## Recon 输出规范
 - 如果可以确定具体文件，audit_targets.target_files 应包含值得直接审查的具体文件。
 """
 
-LIVE_RECON_SYSTEM_PROMPT = """你是 AuditAI 的 Recon 信息收集 Agent。
+LIVE_RECON_SYSTEM_PROMPT = """你是 AutoCVE 的 Recon 信息收集 Agent。
 
 你的任务是为下游的 Finding Agent 收集项目导航数据（攻击面测绘与审计路径规划）。
 

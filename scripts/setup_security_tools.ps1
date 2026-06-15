@@ -1,7 +1,7 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-    AuditAI 安全工具一键安装脚本 (Windows 增强版)
+    AutoCVE 安全工具一键安装脚本 (Windows 增强版)
 
 .DESCRIPTION
     自动安装沙盒和外部安全扫描工具：
@@ -55,7 +55,7 @@ $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $ProjectRoot = Split-Path -Parent $ScriptDir
 
 # 工具安装目录
-$ToolsDir = "$env:LOCALAPPDATA\AuditAI\tools"
+$ToolsDir = "$env:LOCALAPPDATA\AutoCVE\tools"
 
 # ============================================================
 # 辅助函数
@@ -578,21 +578,21 @@ function Install-DockerSandbox {
         New-SandboxDockerfile -Path $sandboxDir
     }
 
-    Write-ColorOutput "构建 AuditAI 沙盒镜像..." "Info"
+    Write-ColorOutput "构建 AutoCVE 沙盒镜像..." "Info"
 
     Push-Location $sandboxDir
     try {
         for ($attempt = 1; $attempt -le $MAX_RETRIES; $attempt++) {
             Write-ColorOutput "构建镜像 (尝试 $attempt/$MAX_RETRIES)..." "Info"
 
-            docker build -t auditai-sandbox:latest -f Dockerfile . 2>&1
+            docker build -t autocve-sandbox:latest -f Dockerfile . 2>&1
 
             if ($LASTEXITCODE -eq 0) {
-                Write-ColorOutput "沙盒镜像构建成功: auditai-sandbox:latest" "Success"
+                Write-ColorOutput "沙盒镜像构建成功: autocve-sandbox:latest" "Success"
 
                 # 验证
                 Write-ColorOutput "验证沙盒镜像..." "Info"
-                docker run --rm auditai-sandbox:latest python3 --version
+                docker run --rm autocve-sandbox:latest python3 --version
                 Write-ColorOutput "Python 环境正常" "Success"
 
                 return $true
@@ -618,7 +618,7 @@ function New-SandboxDockerfile {
     }
 
     $dockerfileContent = @'
-# AuditAI 安全沙盒
+# AutoCVE 安全沙盒
 FROM python:3.11-slim-bookworm
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -714,9 +714,9 @@ function Test-Installation {
 
     # Docker 沙盒检查
     if (Test-Command "docker") {
-        $imageExists = docker image inspect auditai-sandbox:latest 2>&1
+        $imageExists = docker image inspect autocve-sandbox:latest 2>&1
         if ($LASTEXITCODE -eq 0) {
-            Write-ColorOutput "Docker 沙盒镜像: auditai-sandbox:latest ✓" "Success"
+            Write-ColorOutput "Docker 沙盒镜像: autocve-sandbox:latest ✓" "Success"
         }
         else {
             Write-ColorOutput "Docker 沙盒镜像未构建" "Warning"
@@ -768,7 +768,7 @@ function Update-EnvConfig {
 # =============================================
 # 沙盒配置 (自动添加)
 # =============================================
-SANDBOX_IMAGE=auditai-sandbox:latest
+SANDBOX_IMAGE=autocve-sandbox:latest
 SANDBOX_MEMORY_LIMIT=512m
 SANDBOX_CPU_LIMIT=1.0
 SANDBOX_TIMEOUT=60
@@ -788,7 +788,7 @@ function Show-Help {
     Write-Host @"
 
 ╔═══════════════════════════════════════════════════════════════╗
-║     AuditAI 安全工具一键安装脚本 (Windows 增强版)          ║
+║     AutoCVE 安全工具一键安装脚本 (Windows 增强版)          ║
 ╚═══════════════════════════════════════════════════════════════╝
 
 用法:
@@ -821,7 +821,7 @@ function Show-Menu {
     Write-Host ""
     Write-Host "╔═══════════════════════════════════════════════════════════════╗" -ForegroundColor Blue
     Write-Host "║                                                               ║" -ForegroundColor Blue
-    Write-Host "║     🔐 AuditAI 安全工具一键安装脚本 (Windows 增强版)       ║" -ForegroundColor Blue
+    Write-Host "║     🔐 AutoCVE 安全工具一键安装脚本 (Windows 增强版)       ║" -ForegroundColor Blue
     Write-Host "║                                                               ║" -ForegroundColor Blue
     Write-Host "╚═══════════════════════════════════════════════════════════════╝" -ForegroundColor Blue
     Write-Host ""

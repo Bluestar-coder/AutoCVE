@@ -12,7 +12,7 @@ from app.models.report_template import AgentTaskReport
 from app.services.finding_runtime.final_finding_contract import filter_meaningful_exploit_chain, has_meaningful_poc
 from app.services.report_template_file_service import ReportTemplateFileService
 
-DEFAULT_REPORT_TEMPLATE = """# AuditAI 最终漏洞报告
+DEFAULT_REPORT_TEMPLATE = """# AutoCVE 最终漏洞报告
 
 ## 基本信息
 - 生成时间: {{ report.generated_at }}
@@ -257,7 +257,7 @@ def render_report_content(payload: Dict[str, Any], template_content: str, output
     if output_format == "html":
         escaped = rendered.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
         return (
-            "<!DOCTYPE html><html lang='zh-CN'><head><meta charset='UTF-8'><title>AuditAI 最终漏洞报告</title>"
+            "<!DOCTYPE html><html lang='zh-CN'><head><meta charset='UTF-8'><title>AutoCVE 最终漏洞报告</title>"
             "<style>body{font-family:'Microsoft YaHei','PingFang SC',sans-serif;background:#f7f4ee;color:#24303f;padding:40px;}"
             ".page{max-width:1080px;margin:0 auto;background:white;border:1px solid #e6ddcf;border-radius:24px;"
             "box-shadow:0 30px 80px rgba(77,67,49,.12);padding:36px;}"
@@ -296,7 +296,7 @@ async def generate_task_report(
 
     report.template_id = template["slug"] if template else None
     report.output_format = final_format
-    report.title = f"AuditAI-{project.name}-final-report"
+    report.title = f"AutoCVE-{project.name}-final-report"
     report.content = content
     report.report_json = payload
     report.report_metadata = {

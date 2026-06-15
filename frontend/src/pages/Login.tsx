@@ -79,10 +79,10 @@ export default function Login() {
           <div className="absolute inset-0 bg-[linear-gradient(90deg,rgba(255,255,255,0.08)_0%,rgba(255,255,255,0.16)_58%,rgba(255,255,255,0.5)_100%)]" />
           <div className="absolute left-10 top-10 flex items-center gap-4 rounded-[24px] border border-white/70 bg-white/75 px-5 py-4 shadow-[0_20px_48px_rgba(67,87,76,0.12)] backdrop-blur-md">
             <div className="flex h-14 w-14 items-center justify-center rounded-[20px] border border-slate-200/80 bg-white shadow-sm">
-              <img src="/auditai_icon.svg" alt="AuditAI" className="h-10 w-10 object-contain" />
+              <img src="/autocve_icon.svg" alt="AutoCVE" className="h-10 w-10 object-contain" />
             </div>
             <div>
-              <div className="text-2xl font-semibold tracking-[-0.05em] text-slate-950">AI Audit</div>
+              <div className="text-2xl font-semibold tracking-[-0.05em] text-slate-950">AutoCVE</div>
               <div className="mt-1 h-1 w-16 rounded-full bg-[hsl(var(--primary))]/70" />
             </div>
           </div>
@@ -99,7 +99,7 @@ export default function Login() {
             <div className="mb-9 text-center">
               <p className="mb-3 text-xs font-semibold uppercase text-[hsl(var(--primary))]">Secure Workspace</p>
               <h1 className="relative inline-flex flex-col items-center text-5xl font-black leading-none text-slate-950 sm:text-6xl">
-                <span>AI Audit</span>
+                <span>AutoCVE</span>
                 <span className="mt-3 h-1.5 w-24 rounded-full bg-[linear-gradient(90deg,rgba(111,162,127,0),rgba(111,162,127,0.95),rgba(111,162,127,0))]" />
               </h1>
             </div>
@@ -109,7 +109,7 @@ export default function Login() {
                 <div className="flex items-center justify-between gap-3">
                   <div>
                     <p className="mb-2 text-xs font-semibold uppercase tracking-[0.2em] text-slate-400">Welcome Back</p>
-                    <h2 className="text-[2rem] font-semibold tracking-[-0.05em] text-slate-950">{"\u767b\u5f55 AI Audit"}</h2>
+                    <h2 className="text-[2rem] font-semibold tracking-[-0.05em] text-slate-950">{"\u767b\u5f55 AutoCVE"}</h2>
                   </div>
                   <div className="hidden h-12 w-12 items-center justify-center rounded-2xl bg-[rgba(223,235,225,0.8)] text-[hsl(var(--primary))] sm:flex">
                     <CheckCircle2 className="h-5 w-5" />

@@ -1,5 +1,5 @@
 # =============================================
-# AIAudit v1.0.0 Docker Compose 开发者补充配置
+# AutoCVE v1.0.0 Docker Compose 开发者补充配置
 # =============================================
 # 部署: docker compose up -d
 # 注意: 仅用于开发者调试，生产环境请勿使用
@@ -17,4 +17,4 @@ services:
       db:
         condition: service_healthy
     networks:
-      - auditai-network
+      - autocve-network

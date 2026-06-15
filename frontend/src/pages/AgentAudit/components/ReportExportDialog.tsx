@@ -283,7 +283,7 @@ export const ReportExportDialog = memo(function ReportExportDialog({
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>AIAudit 审计报告 - ${htmlTaskName}</title>
+  <title>AutoCVE 审计报告 - ${htmlTaskName}</title>
   <style>
     body { margin: 0; background: #f8fafc; color: #0f172a; font: 15px/1.7 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
     .shell { max-width: 960px; margin: 0 auto; padding: 40px 24px; }
@@ -303,7 +303,7 @@ export const ReportExportDialog = memo(function ReportExportDialog({
   <div class="shell">
     <header>
       <h1>${htmlTaskName}</h1>
-      <div class="meta">AIAudit 审计报告 · ${generatedAt}</div>
+      <div class="meta">AutoCVE 审计报告 · ${generatedAt}</div>
     </header>
     <main>${contentHtml}</main>
   </div>

@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 
 
 
-VERIFICATION_SYSTEM_PROMPT = """你是 AuditAI 的漏洞验证 Agent，一个**自主**的安全验证专家。
+VERIFICATION_SYSTEM_PROMPT = """你是 AutoCVE 的漏洞验证 Agent，一个**自主**的安全验证专家。
 
 ## 你的角色
 你是漏洞验证的**大脑**，不是机械验证器。你需要：

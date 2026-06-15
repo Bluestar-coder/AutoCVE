@@ -5,7 +5,7 @@ services:
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
-      POSTGRES_DB: ${POSTGRES_DB_NAME:-auditai}
+      POSTGRES_DB: ${POSTGRES_DB_NAME:-autocve}
     ports:
       - '5432:5432'
     volumes:
@@ -16,7 +16,7 @@ services:
       timeout: 5s
       retries: 5
     networks:
-      - auditai-network
+      - autocve-network
 
   redis:
     image: redis:7-alpine
@@ -31,7 +31,7 @@ services:
       timeout: 5s
       retries: 5
     networks:
-      - auditai-network
+      - autocve-network
 
   backend:
     build:
@@ -44,18 +44,15 @@ services:
         all_proxy: ''
         ALL_PROXY: ''
     restart: unless-stopped
-    dns:
-      - 192.168.51.151
-      - 10.10.8.211
     env_file:
       - path: ./backend/.env
         required: false
     environment:
-      DATABASE_URL: postgresql+asyncpg://postgres:postgres@db:5432/${POSTGRES_DB_NAME:-auditai}
+      DATABASE_URL: postgresql+asyncpg://postgres:postgres@db:5432/${POSTGRES_DB_NAME:-autocve}
       REDIS_URL: redis://redis:6379/0
       AGENT_ENABLED: 'true'
       SANDBOX_ENABLED: 'true'
-      SANDBOX_IMAGE: ${SANDBOX_IMAGE:-auditai-sandbox:latest}
+      SANDBOX_IMAGE: ${SANDBOX_IMAGE:-autocve-sandbox:latest}
       MANAGED_PROJECTS_ROOT: /workspace/projects
       HOST_PROJECT_ROOT: ${HOST_PROJECT_ROOT:-}
       CHECKMARX_FEATURE_ENABLED: ${CHECKMARX_FEATURE_ENABLED:-false}
@@ -91,7 +88,7 @@ services:
       - ./projects:/workspace/projects
       - /var/run/docker.sock:/var/run/docker.sock
     networks:
-      - auditai-network
+      - autocve-network
 
   frontend:
     build:
@@ -122,12 +119,14 @@ services:
     volumes:
       - ./frontend/nginx.conf:/etc/nginx/conf.d/default.conf:ro
     networks:
-      - auditai-network
+      - autocve-network
 
   sandbox:
     build:
       context: ./docker/sandbox
-    image: auditai-sandbox:latest
+      args:
+        PIP_INDEX_URL: ${SANDBOX_PIP_INDEX_URL:-https://mirrors.aliyun.com/pypi/simple/}
+    image: autocve-sandbox:latest
     restart: 'no'
     command: echo 'Sandbox image ready'
 
@@ -140,16 +139,16 @@ services:
       db:
         condition: service_healthy
     networks:
-      - auditai-network
+      - autocve-network
 
 networks:
-  auditai-network:
+  autocve-network:
     driver: bridge
 
 volumes:
   postgres_data:
-    name: ${POSTGRES_VOLUME_NAME:-auditai_postgres_data}
+    name: ${POSTGRES_VOLUME_NAME:-autocve_postgres_data}
   redis_data:
-    name: ${REDIS_VOLUME_NAME:-auditai_redis_data}
+    name: ${REDIS_VOLUME_NAME:-autocve_redis_data}
   backend_uploads:
-    name: ${BACKEND_UPLOADS_VOLUME_NAME:-auditai_backend_uploads}
+    name: ${BACKEND_UPLOADS_VOLUME_NAME:-autocve_backend_uploads}

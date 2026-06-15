@@ -195,7 +195,7 @@ async def seed_direct_audit_fixture(session_factory) -> None:
                     name="Managed Demo",
                     owner_id="user-1",
                     source_type="local_directory",
-                    local_path="D:/Projects/AuditAI/projects/managed-demo",
+                    local_path="D:/Projects/AutoCVE/projects/managed-demo",
                     workspace_mode="in_place",
                 ),
             ]
@@ -417,7 +417,7 @@ async def test_stream_approve_direct_audit_tool_call_grants_write_and_continues(
                     "project_info": {
                         "project_id": "project-1",
                         "name": "Managed Demo",
-                        "workspace_root": "D:/Projects/AuditAI/projects/managed-demo",
+                        "workspace_root": "D:/Projects/AutoCVE/projects/managed-demo",
                     }
                 },
                 runtime_state_json={},
@@ -649,7 +649,7 @@ async def test_continue_direct_audit_session_stream_emits_runtime_error_from_che
                 runtime_stack="runtime",
                 state="failed",
                 system_prompt="direct audit",
-                recon_payload={"project_info": {"workspace_root": "D:/Projects/AuditAI/projects/managed-demo"}},
+                recon_payload={"project_info": {"workspace_root": "D:/Projects/AutoCVE/projects/managed-demo"}},
                 runtime_state_json={},
                 created_at=datetime.now(timezone.utc),
                 updated_at=datetime.now(timezone.utc),
@@ -900,7 +900,7 @@ async def test_stream_approve_direct_audit_shell_tool_call_grants_command_and_co
                     "project_info": {
                         "project_id": "project-1",
                         "name": "Managed Demo",
-                        "workspace_root": "D:/Projects/AuditAI/projects/managed-demo",
+                        "workspace_root": "D:/Projects/AutoCVE/projects/managed-demo",
                     }
                 },
                 runtime_state_json={},
@@ -1034,7 +1034,7 @@ async def test_sync_latest_direct_audit_report_creates_managed_vulnerability_rec
                     "project_info": {
                         "project_id": "project-1",
                         "name": "Managed Demo",
-                        "workspace_root": "D:/Projects/AuditAI/projects/managed-demo",
+                        "workspace_root": "D:/Projects/AutoCVE/projects/managed-demo",
                         "repository_url": "https://example.com/demo.git",
                         "default_branch": "main",
                     }
@@ -1115,7 +1115,7 @@ async def test_sync_latest_direct_audit_report_reuses_existing_managed_vulnerabi
                     "project_info": {
                         "project_id": "project-1",
                         "name": "Managed Demo",
-                        "workspace_root": "D:/Projects/AuditAI/projects/managed-demo",
+                        "workspace_root": "D:/Projects/AutoCVE/projects/managed-demo",
                     }
                 },
                 runtime_state_json={},
@@ -1343,7 +1343,7 @@ async def test_sync_latest_direct_audit_report_generates_missing_bundle_from_fin
                     "project_info": {
                         "project_id": "project-1",
                         "name": "Managed Demo",
-                        "workspace_root": "D:/Projects/AuditAI/projects/managed-demo",
+                        "workspace_root": "D:/Projects/AutoCVE/projects/managed-demo",
                         "repository_url": "https://example.com/demo.git",
                         "default_branch": "main",
                     }

@@ -1,10 +1,10 @@
 @echo off
 chcp 65001 >nul 2>&1
-title AuditAI 安全工具安装
+title AutoCVE 安全工具安装
 
 echo.
 echo ╔═══════════════════════════════════════════════════════════════╗
-echo ║     AuditAI 安全工具一键安装脚本 (Windows)                 ║
+echo ║     AutoCVE 安全工具一键安装脚本 (Windows)                 ║
 echo ╚═══════════════════════════════════════════════════════════════╝
 echo.
 

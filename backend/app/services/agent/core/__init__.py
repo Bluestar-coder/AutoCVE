@@ -1,5 +1,5 @@
 """
-AuditAI Agent 核心模块
+AutoCVE Agent 核心模块
 
 包含Agent系统的基础组件：
 - state: 增强的Agent状态管理

@@ -45,7 +45,7 @@ class AgentState(BaseModel):
     
     # ============ 基本信息 ============
     agent_id: str = Field(default_factory=_generate_agent_id)
-    agent_name: str = "AuditAI Agent"
+    agent_name: str = "AutoCVE Agent"
     agent_type: str = "generic"  # recon, analysis, verification, specialist
     parent_id: Optional[str] = None  # 父Agent ID（用于动态Agent树）
     
