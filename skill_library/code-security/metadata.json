@@ -30,8 +30,8 @@
     "storage_path": "/app/skill_library/code-security",
     "skill_file": "/app/skill_library/code-security/SKILL.md",
     "workspace_relative_path": "skill_library/code-security",
-    "host_storage_path": "D:/文件/pythonProject/AICVE/AutoCVE/DeepAudit-3.0.0\\skill_library\\code-security",
-    "host_skill_file": "D:/文件/pythonProject/AICVE/AutoCVE/DeepAudit-3.0.0\\skill_library\\code-security\\SKILL.md",
+    "host_storage_path": "",
+    "host_skill_file": "",
     "display_root": "skill_library",
     "source_type": "github",
     "source_url": "https://github.com/semgrep/skills/tree/main/skills/code-security",
@@ -45,12 +45,12 @@
         "storage_path": "/app/skill_library/agents/finding/code-security",
         "skill_file": "/app/skill_library/agents/finding/code-security/SKILL.md",
         "workspace_relative_path": "skill_library/agents/finding/code-security",
-        "host_storage_path": "D:/文件/pythonProject/AICVE/AutoCVE/DeepAudit-3.0.0\\skill_library\\agents\\finding\\code-security",
-        "host_skill_file": "D:/文件/pythonProject/AICVE/AutoCVE/DeepAudit-3.0.0\\skill_library\\agents\\finding\\code-security\\SKILL.md"
+        "host_storage_path": "",
+        "host_skill_file": ""
       }
     },
     "workspace_file_path": "skill_library/code-security/SKILL.md",
-    "host_file_path": "D:/文件/pythonProject/AICVE/AutoCVE/DeepAudit-3.0.0\\skill_library\\code-security\\SKILL.md",
+    "host_file_path": "",
     "workspace_skill_file": "skill_library/code-security/SKILL.md",
     "folder_path": "/app/skill_library/code-security",
     "bindings_file": "/app/skill_library/code-security/bindings.json"

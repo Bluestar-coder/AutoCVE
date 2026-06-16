@@ -5,7 +5,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: '镜像标签 (例如: latest, dev, v3.0.0)'
+        description: '镜像标签 (例如: latest, dev, v1.0.0)'
         required: true
         default: 'latest'
         type: string

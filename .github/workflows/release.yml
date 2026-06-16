@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: '版本号 (例如: v3.0.0)'
+        description: '版本号 (例如: v1.0.0)'
         required: true
         type: string
       prerelease:
@@ -157,13 +157,13 @@ jobs:
           
           echo "" >> CHANGELOG.md
           echo "" >> CHANGELOG.md
-          echo "## 🚀 v3.0.0 新特性" >> CHANGELOG.md
+          echo "## 🚀 AutoCVE 发布亮点" >> CHANGELOG.md
           echo "" >> CHANGELOG.md
-          echo "- 🤖 **Multi-Agent 架构**: Orchestrator/Analysis/Recon/Verification 多智能体协作" >> CHANGELOG.md
-          echo "- 🧠 **RAG 知识库增强**: 代码语义理解 + CWE/CVE 漏洞知识库" >> CHANGELOG.md
-          echo "- 🔒 **沙箱漏洞验证**: Docker 安全容器自动执行 PoC" >> CHANGELOG.md
-          echo "- 🛠️ **专业安全工具集成**: Semgrep, Bandit, Gitleaks, OSV-Scanner" >> CHANGELOG.md
-          echo "- 🐛 **稳定性增强**: 修复多智能体工具调用循环、UI 显示及 Docker 环境兼容性问题" >> CHANGELOG.md
+          echo "- **一键 CVE 挖掘**: 支持项目筛选、仓库导入、审计任务创建和候选漏洞跟踪" >> CHANGELOG.md
+          echo "- **Multi-Agent 审计流程**: 通过 Orchestrator 调度 Recon、Scan、Triage、Finding、Verification 等 Agent" >> CHANGELOG.md
+          echo "- **Finding Agent 深度挖掘**: 基于 ReAct loop、工具编排、nudge 纠偏和结构化终止工具产出漏洞证据" >> CHANGELOG.md
+          echo "- **漏洞报告管理**: 支持中文报告、English Report 和 CVE 报告生成与维护" >> CHANGELOG.md
+          echo "- **一行命令部署**: 提供基于 GHCR 预构建镜像的 Docker Compose 生产部署方式" >> CHANGELOG.md
           echo "" >> CHANGELOG.md
           echo "## 📦 下载说明" >> CHANGELOG.md
           echo "" >> CHANGELOG.md

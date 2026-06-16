@@ -257,7 +257,7 @@ export function SplashScreen({ onComplete }: SplashScreenProps) {
             </div>
             {/* Version tag */}
             <div className="mt-2 text-[10px] font-mono text-primary/50 tracking-widest">
-              [ v3.0.0 // NEURAL_CORE ]
+              [ v1.0.0 // AUTOCVE_CORE ]
             </div>
           </div>
 

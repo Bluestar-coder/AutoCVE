@@ -3,8 +3,8 @@
     "storage_path": "/app/skill_library/code-audit-finding",
     "workspace_relative_path": "skill_library/code-audit-finding",
     "workspace_file_path": "skill_library/code-audit-finding/SKILL.md",
-    "host_storage_path": "D:/文件/pythonProject/AICVE/AutoCVE/DeepAudit-3.0.0\\skill_library\\code-audit-finding",
-    "host_file_path": "D:/文件/pythonProject/AICVE/AutoCVE/DeepAudit-3.0.0\\skill_library\\code-audit-finding\\SKILL.md",
+    "host_storage_path": "",
+    "host_file_path": "",
     "workspace_skill_file": "skill_library/code-audit-finding/SKILL.md",
     "folder_path": "/app/skill_library/code-audit-finding",
     "bindings_file": "/app/skill_library/code-audit-finding/bindings.json"

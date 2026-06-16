@@ -12,8 +12,8 @@
   },
   "metadata": {
     "seeded_by": "init_agent_assets",
-    "storage_path": "D:\\文件\\pythonProject\\AICVE\\AutoCVE\\DeepAudit-3.0.0\\backend\\report_template_library\\report-template",
-    "template_file": "D:\\文件\\pythonProject\\AICVE\\AutoCVE\\DeepAudit-3.0.0\\backend\\report_template_library\\report-template\\template.md",
+    "storage_path": "report_template_library/report-template",
+    "template_file": "report_template_library/report-template/template.md",
     "workspace_relative_path": "report_template_library/report-template",
     "workspace_file_path": "report_template_library/report-template/template.md",
     "host_storage_path": "",
