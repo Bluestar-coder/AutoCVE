@@ -43,7 +43,7 @@ RUN rm -f /etc/apt/apt.conf.d/proxy.conf 2>/dev/null || true     && echo 'Acquir
 COPY --from=builder /app/.venv /app/.venv
 COPY . .
 
-RUN mkdir -p /app/uploads/zip_files     && chmod +x /app/docker-entrypoint.sh
+RUN mkdir -p /app/uploads/zip_files     && sed -i 's/\r$//' /app/docker-entrypoint.sh     && chmod +x /app/docker-entrypoint.sh
 
 EXPOSE 8000
 CMD ["/app/docker-entrypoint.sh"]
