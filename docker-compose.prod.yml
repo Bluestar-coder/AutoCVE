@@ -2,7 +2,7 @@
 # AutoCVE V1.0.0 鐢熶骇鐜涓€閿儴缃查厤缃?
 # =============================================
 # 浣跨敤棰勬瀯寤虹殑 GHCR 闀滃儚锛屾棤闇€鏈湴鏋勫缓
-# 閮ㄧ讲鍛戒护: curl -fsSL https://raw.githubusercontent.com/larlarua/AutoCVE/v1.0.2/docker-compose.prod.yml | docker compose -f - up -d
+# 閮ㄧ讲鍛戒护: curl -fsSL https://raw.githubusercontent.com/larlarua/AutoCVE/v1.0.3/docker-compose.prod.yml | docker compose -f - up -d
 
 services:
   db:
@@ -36,7 +36,7 @@ services:
       - autocve-network
 
   backend:
-    image: ghcr.io/larlarua/autocve-backend:v1.0.2
+    image: ghcr.io/larlarua/autocve-backend:v1.0.3
     restart: unless-stopped
     cpus: "1.0"
     mem_limit: 1g
@@ -57,7 +57,7 @@ services:
       - ONE_CLICK_CVE_EXECUTION_MODE=worker
       - ONE_CLICK_CVE_MAX_REPOSITORY_SIZE_KB=${ONE_CLICK_CVE_MAX_REPOSITORY_SIZE_KB:-512000}
       - SANDBOX_ENABLED=true
-      - SANDBOX_IMAGE=ghcr.io/larlarua/autocve-sandbox:v1.0.2
+      - SANDBOX_IMAGE=ghcr.io/larlarua/autocve-sandbox:v1.0.3
       # LLM 閰嶇疆 - 璇锋牴鎹渶瑕佷慨鏀?
       - LLM_PROVIDER=${LLM_PROVIDER:-openai}
       - LLM_MODEL=${LLM_MODEL:-gpt-4o}
@@ -84,7 +84,7 @@ services:
 
   # 鏁版嵁搴撹縼绉绘湇鍔?- 鍦ㄥ悗绔惎鍔ㄥ墠鑷姩鎵ц
   agent-worker:
-    image: ghcr.io/larlarua/autocve-backend:v1.0.2
+    image: ghcr.io/larlarua/autocve-backend:v1.0.3
     restart: unless-stopped
     cpus: "2.0"
     mem_limit: 4g
@@ -102,7 +102,7 @@ services:
       - AGENT_EVENT_STREAM_ENABLED=true
       - ONE_CLICK_CVE_EXECUTION_MODE=worker
       - SANDBOX_ENABLED=true
-      - SANDBOX_IMAGE=ghcr.io/larlarua/autocve-sandbox:v1.0.2
+      - SANDBOX_IMAGE=ghcr.io/larlarua/autocve-sandbox:v1.0.3
       - LLM_PROVIDER=${LLM_PROVIDER:-openai}
       - LLM_MODEL=${LLM_MODEL:-gpt-4o}
       - LLM_API_KEY=${LLM_API_KEY:-your-api-key-here}
@@ -127,7 +127,7 @@ services:
       - autocve-network
 
   one-click-cve-worker:
-    image: ghcr.io/larlarua/autocve-backend:v1.0.2
+    image: ghcr.io/larlarua/autocve-backend:v1.0.3
     restart: unless-stopped
     cpus: "1.0"
     mem_limit: 2g
@@ -146,7 +146,7 @@ services:
       - ONE_CLICK_CVE_WORKER_JOB_TIMEOUT_SECONDS=${ONE_CLICK_CVE_WORKER_JOB_TIMEOUT_SECONDS:-7200}
       - ONE_CLICK_CVE_WORKER_MAX_TRIES=${ONE_CLICK_CVE_WORKER_MAX_TRIES:-1}
       - SANDBOX_ENABLED=true
-      - SANDBOX_IMAGE=ghcr.io/larlarua/autocve-sandbox:v1.0.2
+      - SANDBOX_IMAGE=ghcr.io/larlarua/autocve-sandbox:v1.0.3
       - LLM_PROVIDER=${LLM_PROVIDER:-openai}
       - LLM_MODEL=${LLM_MODEL:-gpt-4o}
       - LLM_API_KEY=${LLM_API_KEY:-your-api-key-here}
@@ -171,7 +171,7 @@ services:
       - autocve-network
 
   db-migrate:
-    image: ghcr.io/larlarua/autocve-backend:v1.0.2
+    image: ghcr.io/larlarua/autocve-backend:v1.0.3
     restart: "no"
     environment:
       - DATABASE_URL=postgresql+asyncpg://postgres:postgres@db:5432/autocve
@@ -183,7 +183,7 @@ services:
       - autocve-network
 
   frontend:
-    image: ghcr.io/larlarua/autocve-frontend:v1.0.2
+    image: ghcr.io/larlarua/autocve-frontend:v1.0.3
     restart: unless-stopped
     ports:
       - "3000:80"
@@ -201,7 +201,7 @@ services:
 
   # 棰勬媺鍙栨矙绠遍暅鍍忥紙鍚庣浼氭寜闇€璋冪敤锛?
   sandbox-pull:
-    image: ghcr.io/larlarua/autocve-sandbox:v1.0.2
+    image: ghcr.io/larlarua/autocve-sandbox:v1.0.3
     restart: "no"
     command: echo "Sandbox image ready"
 
