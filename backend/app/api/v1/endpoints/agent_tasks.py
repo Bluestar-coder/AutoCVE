@@ -1,7 +1,4 @@
-"""
-AutoCVE Agent 闂佽楠搁婵嬪Χ鎼粹剝鍊庡┑鐐差嚟婵箖顢氳閹?API
-闂備胶纭堕弲鐐差浖閵娧嗗С?LangGraph 闂?Agent 闂佽楠搁婵嬪Χ鎼粹剝鍊?
-"""
+"""AutoCVE Agent task API."""
 
 import asyncio
 import contextlib
@@ -68,7 +65,6 @@ AUTO_MANAGED_REPORT_POSTPROCESSING_ENABLED = True
 
 # Running task registry kept for cancellation and legacy task lookups.
 
-# 婵☆偓绲介崯顖炲汲?闂佸搫顦弲婊堝礉濮椻偓閵嗕線骞嬮悙纰樻灃濡炪倖鎸炬慨鐢告偩?asyncio Tasks闂備焦瀵х粙鎴︽偋韫囨稑鏋侀柕鍫濇椤╂煡骞栫划鍏夊亾瀹曞洨鐣抽梻浣告啞鐢喎鈻斿☉婧夸汗闁搞儜鈧Σ鍫ユ煕椤愵偄澧扮紒鈧?
 
 
 # ============ Schemas ============
@@ -120,51 +116,43 @@ class AgentTaskResponse(BaseModel):
     commit_sha: Optional[str] = None
     repository_url_snapshot: Optional[str] = None
     
-    # 闂佸搫顦弲婊呯矙閹寸姭鍋撻悷鎵紞缂佽鲸甯￠幃銏犆虹拠鍙夊€?
     total_files: int = 0
     indexed_files: int = 0
     analyzed_files: int = 0
     files_with_findings: int = 0
     total_chunks: int = 0
     
-    # Agent 缂傚倸鍊烽懗鍫曞窗閺囥埄鏁?
     total_iterations: int = 0
     tool_calls_count: int = 0
     tokens_used: int = 0
     
-    # 闂備礁鎲￠悷锕傚垂瑜版帞宓侀柛銉㈡櫇绾惧ジ鏌ｉ弮鈧鍧楀触閳ь剟姊洪幐搴ｂ槈闁绘妫濆畷銉р偓锝庡厴閸嬫捁銇愰幒鍡椾壕婵炴垶澹曢幏锛勭磽娴ｅ壊妲哥紒澶嬫尦楠炲﹪鏁撻悩鑼缎曢悗骞垮劚缁绘帞绮?
     findings_count: int = 0
-    total_findings: int = 0  # 闂備胶顭堢换鎺楀储瑜旈、娆撳箛椤旂懓浜炬繛鎴炵懐濞堟洘銇?
+    total_findings: int = 0
     verified_count: int = 0
-    verified_findings: int = 0  # 闂備胶顭堢换鎺楀储瑜旈、娆撳箛椤旂懓浜炬繛鎴炵懐濞堟洘銇?
+    verified_findings: int = 0
     false_positive_count: int = 0
     
-    # 濠电偞鍨堕幐鍫曞磿閻㈢闂柛婵勫劤閻瑩鎮楅敐搴濈盎妞ゆ柨锕︾槐鎾存媴閸濆嫭鐏嗗?
     critical_count: int = 0
     high_count: int = 0
     medium_count: int = 0
     low_count: int = 0
     
-    # 闂佽崵濮村ú銈団偓姘煎墴瀹?
     quality_score: float = 0.0
     security_score: Optional[float] = None
     
     # Progress metrics
     progress_percentage: float = 0.0
     
-    # 闂備礁鎼崯顐︽偉閻撳宫?
     created_at: datetime
     started_at: Optional[datetime] = None
     completed_at: Optional[datetime] = None
     
-    # 闂傚倷鐒﹀妯肩矓閸洘鍋?
     audit_scope: Optional[dict] = None
     target_vulnerabilities: Optional[List[str]] = None
     verification_level: Optional[str] = None
     exclude_patterns: Optional[List[str]] = None
     target_files: Optional[List[str]] = None
     
-    # 闂傚倷鐒︾€笛囨偡閵娾晩鏁嬮柕鍫濇閳瑰秹鏌嶉埡浣告殨缂?
     error_message: Optional[str] = None
     runtime_session_id: Optional[str] = None
     finding_runtime_stack: str = FindingRuntimeStack.RUNTIME.value
@@ -282,13 +270,9 @@ class DebugTraceResponse(BaseModel):
     handoffs: List[Dict[str, Any]]
 
 
-# ============ 闂備礁鎲￠懝鐐殽濮濆被浜归悗娑欘焽椤╃兘鎮归崶銊ョ祷妞ゎ偁鍊濋弻鐔虹箔濞戞ɑ锛嶉柡鈧?============
 
-# 闂佸搫顦弲婊堝礉濮椻偓閵嗕線骞嬮悙纰樻灃濡炪倖鎸炬慨鐢告偩闁秵鐓曢柡鍌濐嚙婵′粙鏌嶈閸忔盯鎮為敂鑺ユ珷闁伙絽鏈崑姗€鎮橀悙璺盒撻柣?
 _running_orchestrators: Dict[str, Any] = {}
-# 闂佸搫顦弲婊堝礉濮椻偓閵嗕線骞嬮悙纰樻灃濡炪倖鎸炬慨鐢告偩閸楃伝鐟邦煥閸愭儳鍓┑鐐叉閸ㄨ崵鍒掓繝姘櫖闁告洦鍓欓埀顒傚仱閺屾盯鏁愭惔锝呭辅缂備浇椴搁悷鈺呭箖娴犲惟闁靛牆娲╂竟?SSE 婵犵數鍋熺换婵堟閵堝洦顫?
 _running_event_managers: Dict[str, EventManager] = {}
-# 婵☆偓绲介崯顖炲汲?闁诲海鎳撻幉陇銇愰崘顓滀汗闁搞儜鈧Σ鍫ユ煕椤愮姴鐏柣锝呭船闇夐柣妯硅閸ゆ瑥鈹戦鎯ф灈婵﹤娼″畷鍗炍旀担绯曞亾閵堝鐓ユ繛鎴烆焽婢с垽鏌℃担闈涒偓鏍矉瀹ュ棙鍎熼柍銉﹀墯閺嬧偓缂傚倸鍊搁崰姘跺窗濡ゅ懎绠归梺鍨儐婵瓨绻濇繝鍌涘櫤闁伙綁浜堕弻娑樷枎閹邦喖顫х紓浣割槸閸㈣尪鐏嬮梺閫炲苯澧寸€殿喖顭锋俊鐑筋敍濠婂拋妲?
 ONE_CLICK_CVE_DEFAULT_DISABLED_AGENTS = {"scan", "triage", "verification"}
 ONE_CLICK_CVE_DEFAULT_ENABLED_AGENTS = {"finding"}
 
