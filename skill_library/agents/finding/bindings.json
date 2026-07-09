@@ -59,7 +59,7 @@
       "skill_id": "code-security",
       "slug": "code-security",
       "agent_type": "finding",
-      "enabled": false,
+      "enabled": true,
       "always_include": true,
       "sort_order": 1,
       "match_keywords": [

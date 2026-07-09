@@ -54,7 +54,7 @@
         }
       ],
       "installed_at": "2026-04-13T06:46:54.935284+00:00",
-      "updated_at": "2026-07-04T16:55:29.502535+00:00"
+      "updated_at": "2026-07-08T20:40:55.647725+00:00"
     },
     {
       "slug": "code-security",
@@ -91,7 +91,7 @@
           "skill_id": "code-security",
           "slug": "code-security",
           "agent_type": "finding",
-          "enabled": false,
+          "enabled": true,
           "always_include": true,
           "sort_order": 1,
           "match_keywords": [
@@ -125,7 +125,7 @@
         }
       ],
       "installed_at": "2026-04-13T06:46:55.166264+00:00",
-      "updated_at": "2026-07-04T16:55:30.136779+00:00"
+      "updated_at": "2026-07-08T20:40:55.659498+00:00"
     },
     {
       "slug": "cve-report-writer",
@@ -173,7 +173,7 @@
         }
       ],
       "installed_at": "2026-04-15T07:49:49.799600+00:00",
-      "updated_at": "2026-07-04T16:55:30.868373+00:00"
+      "updated_at": "2026-07-08T20:40:55.669647+00:00"
     },
     {
       "slug": "secknowledge-skill",
@@ -221,7 +221,7 @@
         }
       ],
       "installed_at": "2026-05-27T09:52:48.320518+00:00",
-      "updated_at": "2026-07-04T16:55:31.653450+00:00"
+      "updated_at": "2026-07-08T20:40:55.679449+00:00"
     }
   ]
 }
