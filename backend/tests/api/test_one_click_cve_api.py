@@ -221,7 +221,7 @@ async def test_create_one_click_cve_batch_returns_immediately_when_llm_preflight
 
 
 @pytest.mark.asyncio
-async def test_create_one_click_cve_batch_rejects_count_above_twenty():
+async def test_create_one_click_cve_batch_rejects_count_above_ten():
     engine = create_async_engine("sqlite+aiosqlite:///:memory:")
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
 
@@ -242,7 +242,7 @@ async def test_create_one_click_cve_batch_rejects_count_above_twenty():
 
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://testserver") as client:
-        response = await client.post("/api/v1/one-click-cve/batches", json={"target_count": 21})
+        response = await client.post("/api/v1/one-click-cve/batches", json={"target_count": 11})
 
     await engine.dispose()
 
@@ -379,11 +379,17 @@ async def test_cancel_one_click_cve_batch_cancels_active_agent_tasks(monkeypatch
             running = await db.get(AgentTask, "task-running")
             pending = await db.get(AgentTask, "task-pending")
             completed = await db.get(AgentTask, "task-completed")
+            running_project = await db.get(OneClickCveBatchProject, "batch-project-running")
+            pending_project = await db.get(OneClickCveBatchProject, "batch-project-pending")
+            completed_project = await db.get(OneClickCveBatchProject, "batch-project-completed")
 
         assert response.status_code == 200
         assert running.status == AgentTaskStatus.CANCELLED
         assert pending.status == AgentTaskStatus.CANCELLED
         assert completed.status == AgentTaskStatus.COMPLETED
+        assert running_project.status == OneClickCveProjectStatus.CANCELLED
+        assert pending_project.status == OneClickCveProjectStatus.CANCELLED
+        assert completed_project.status == OneClickCveProjectStatus.COMPLETED
         assert fake_runner.cancelled is True
         assert fake_asyncio_task.cancelled is True
         assert "task-running" in agent_tasks_endpoint._cancelled_tasks

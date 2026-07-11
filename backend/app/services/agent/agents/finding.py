@@ -531,6 +531,9 @@ class FindingAgent(AnalysisWorkflowAgent):
         if isinstance(runtime_error, dict):
             stop_reason = str(runtime_error.get("stop_reason") or "").strip()
             message = str(runtime_error.get("message") or runtime_error.get("error") or "").strip()
+            if stop_reason == "timeout" or "timeout" in message.lower() or "超时" in message:
+                suffix = f"原始错误：{message}" if message else "运行超过配置的时间限制。"
+                return f"Finding 未完成：Agent 审计超时，未进入最终提交阶段。{suffix}"
             if stop_reason == RuntimeStopReason.MODEL_ERROR.value:
                 suffix = f"原始错误：{message}" if message else "原始错误未返回详细信息。"
                 return f"Finding 未完成：模型流式请求失败，未能继续到 FinalizeFinding。{suffix}"

@@ -1462,9 +1462,10 @@ async def _execute_agent_task_impl(task_id: str):
             logger.info(f"Task {task_id} cancelled")
             task = await db.get(AgentTask, task_id)
             if task:
+                existing_error_message = task.error_message
                 task.status = AgentTaskStatus.CANCELLED
                 task.completed_at = datetime.now(timezone.utc)
-                task.error_message = "Task cancelled"
+                task.error_message = existing_error_message or "Task cancelled"
                 task.duration_ms = int((time.time() - start_time) * 1000)
                 runtime_stats = (await _load_runtime_task_stats(db, [task_id])).get(str(task_id), {})
                 if runtime_stats.get("total_iterations"):

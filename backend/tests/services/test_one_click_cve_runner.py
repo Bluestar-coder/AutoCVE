@@ -382,3 +382,114 @@ async def test_wait_for_task_completion_cancels_agent_task_when_batch_is_cancell
     assert cancelled_tasks == ["task-1"]
     assert task.status == AgentTaskStatus.CANCELLED
     assert "batch cancellation" in task.error_message
+
+
+@pytest.mark.asyncio
+async def test_create_agent_task_uses_fifty_minute_timeout():
+    candidate = GitHubRepositoryCandidate(
+        full_name="demo/project",
+        repository_url="https://github.com/demo/project",
+        description="Demo",
+        language="Python",
+        stars=1000,
+        pushed_at=datetime(2026, 6, 6, tzinfo=timezone.utc),
+        updated_at=datetime(2026, 6, 6, tzinfo=timezone.utc),
+        default_branch="main",
+        version_label="v1.0.0",
+        version_source="latest_release",
+        has_security_advisory=True,
+        advisory_count=1,
+        has_security_policy=True,
+        score=1000,
+    )
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+    async with session_factory() as db:
+        user = User(
+            id="user-1",
+            email="owner@example.com",
+            hashed_password="not-a-real-hash",
+            full_name="Owner",
+            is_active=True,
+        )
+        project = Project(
+            id="project-1",
+            name="demo/project",
+            owner_id="user-1",
+            source_type="repository",
+            repository_url="https://github.com/demo/project",
+        )
+        db.add_all([user, project])
+        await db.commit()
+
+        task = await one_click_runner._create_agent_task(
+            db,
+            project=project,
+            user_id="user-1",
+            candidate=candidate,
+            batch_id="batch-1",
+        )
+
+    await engine.dispose()
+
+    assert task.timeout_seconds == 3000
+
+
+@pytest.mark.asyncio
+async def test_wait_for_task_completion_marks_one_click_timeout_separately(monkeypatch):
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+    async with session_factory() as setup_db:
+        user = User(
+            id="user-1",
+            email="owner@example.com",
+            hashed_password="not-a-real-hash",
+            full_name="Owner",
+            is_active=True,
+        )
+        project = Project(
+            id="project-1",
+            name="timeout/demo",
+            owner_id="user-1",
+            source_type="repository",
+            repository_url="https://github.com/timeout/demo",
+        )
+        task = AgentTask(
+            id="task-1",
+            project_id="project-1",
+            created_by="user-1",
+            name="One-click CVE",
+            version_label="v1.0.0",
+            repository_url_snapshot="https://github.com/timeout/demo",
+            status=AgentTaskStatus.RUNNING,
+            timeout_seconds=3000,
+        )
+        setup_db.add_all([user, project, task])
+        await setup_db.commit()
+
+    monkeypatch.setattr(one_click_runner, "POLL_INTERVAL_SECONDS", 0)
+    clock_values = iter([0.0, 3001.0])
+    monkeypatch.setattr(one_click_runner, "_monotonic_seconds", lambda: next(clock_values))
+    run_task = asyncio.create_task(asyncio.sleep(5))
+
+    async with session_factory() as db:
+        with pytest.raises(one_click_runner.OneClickCveAgentTimeout, match="50分钟"):
+            await one_click_runner._wait_for_task_completion(db, "task-1", run_task)
+
+    async with session_factory() as db:
+        task = await db.get(AgentTask, "task-1")
+
+    await engine.dispose()
+
+    assert task.status == AgentTaskStatus.CANCELLED
+    assert "Agent审计任务超时" in task.error_message
+    assert not task.error_message.endswith("；")
+    assert "FinalizeFinding" not in task.error_message

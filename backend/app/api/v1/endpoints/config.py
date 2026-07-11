@@ -39,6 +39,7 @@ SENSITIVE_LLM_FIELDS = [
     "baiduApiKey",
     "minimaxApiKey",
     "doubaoApiKey",
+    "mimoApiKey",
 ]
 SENSITIVE_OTHER_FIELDS = ["githubToken", "gitlabToken"]
 PROVIDER_KEY_MAP = {
@@ -52,6 +53,7 @@ PROVIDER_KEY_MAP = {
     "baidu": "baiduApiKey",
     "minimax": "minimaxApiKey",
     "doubao": "doubaoApiKey",
+    "mimo": "mimoApiKey",
 }
 
 
@@ -113,6 +115,7 @@ class LLMConfigSchema(BaseModel):
     baiduApiKey: Optional[str] = None
     minimaxApiKey: Optional[str] = None
     doubaoApiKey: Optional[str] = None
+    mimoApiKey: Optional[str] = None
     ollamaBaseUrl: Optional[str] = None
     env: Dict[str, str] = Field(default_factory=dict)
     alwaysThinkingEnabled: Optional[bool] = None
@@ -363,6 +366,8 @@ def get_default_config() -> Dict[str, Any]:
             "llmTimeout": int(settings.LLM_TIMEOUT * 1000),
             "llmTemperature": settings.LLM_TEMPERATURE,
             "llmMaxTokens": settings.LLM_MAX_TOKENS,
+            "endpointProtocol": getattr(settings, "LLM_ENDPOINT_PROTOCOL", "openai_chat"),
+            "toolMessageFormat": getattr(settings, "LLM_TOOL_MESSAGE_FORMAT", "auto"),
             "llmCustomHeaders": "",
             "llmFirstTokenTimeout": getattr(settings, "LLM_FIRST_TOKEN_TIMEOUT", 30),
             "llmStreamTimeout": getattr(settings, "LLM_STREAM_TIMEOUT", 60),
@@ -382,6 +387,7 @@ def get_default_config() -> Dict[str, Any]:
             "baiduApiKey": settings.BAIDU_API_KEY or "",
             "minimaxApiKey": settings.MINIMAX_API_KEY or "",
             "doubaoApiKey": settings.DOUBAO_API_KEY or "",
+            "mimoApiKey": getattr(settings, "MIMO_API_KEY", "") or "",
             "ollamaBaseUrl": settings.OLLAMA_BASE_URL or "http://localhost:11434/v1",
             "agentConfigs": _default_agent_configs(),
         },
@@ -452,6 +458,8 @@ def _build_test_user_config(saved_config: Dict[str, Any], agent_type: Optional[s
                 "llmTimeout",
                 "llmTemperature",
                 "llmMaxTokens",
+                "endpointProtocol",
+                "toolMessageFormat",
                 "alwaysThinkingEnabled",
             ):
                 value = override.get(key)
@@ -670,12 +678,19 @@ async def sync_assets(
 async def get_llm_providers() -> Any:
     providers = []
     for provider in LLMFactory.get_supported_providers():
+        metadata = LLMFactory.get_provider_metadata(provider)
         providers.append(
             {
                 "value": provider.value,
-                "label": provider.value.upper(),
+                "label": metadata.get("label") or provider.value.upper(),
                 "default_model": LLMFactory.get_default_model(provider),
                 "models": LLMFactory.get_available_models(provider),
+                "default_endpoint_protocol": metadata.get("default_endpoint_protocol"),
+                "supported_endpoint_protocols": metadata.get("supported_endpoint_protocols", []),
+                "tool_capability": metadata.get("tool_capability", {}),
+                "default_model_capabilities": metadata.get("default_model_capabilities", {}),
+                "model_capabilities": metadata.get("model_capabilities", {}),
+                "notes": metadata.get("notes", ""),
             }
         )
     return {"providers": providers, "agents": AGENT_TYPES}

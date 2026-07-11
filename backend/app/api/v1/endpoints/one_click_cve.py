@@ -46,7 +46,7 @@ ACTIVE_ONE_CLICK_CVE_PROJECT_STATUSES = {
 
 
 class OneClickCveBatchCreate(BaseModel):
-    target_count: int = Field(..., ge=1, le=20)
+    target_count: int = Field(..., ge=1, le=10)
     prefer_security_advisory: bool = True
 
 
@@ -111,6 +111,13 @@ async def _get_owned_batch(batch_id: str, db: AsyncSession, current_user: User) 
 
 
 async def _cancel_active_batch_agent_tasks(db: AsyncSession, batch_id: str) -> None:
+    project_result = await db.execute(
+        select(OneClickCveBatchProject).where(
+            OneClickCveBatchProject.batch_id == batch_id,
+            OneClickCveBatchProject.status.in_(ACTIVE_ONE_CLICK_CVE_PROJECT_STATUSES),
+        )
+    )
+    projects = list(project_result.scalars().all())
     result = await db.execute(
         select(AgentTask)
         .join(OneClickCveBatchProject, OneClickCveBatchProject.agent_task_id == AgentTask.id)
@@ -122,6 +129,10 @@ async def _cancel_active_batch_agent_tasks(db: AsyncSession, batch_id: str) -> N
     )
     tasks = list(result.scalars().all())
     completed_at = datetime.now(timezone.utc)
+    for project in projects:
+        project.status = OneClickCveProjectStatus.CANCELLED
+        project.error_message = project.error_message or "Cancelled by one-click CVE batch cancellation"
+        project.updated_at_local = completed_at
     for task in tasks:
         request_agent_task_cancellation(str(task.id))
         task.status = AgentTaskStatus.CANCELLED

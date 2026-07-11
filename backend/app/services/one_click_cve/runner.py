@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import time
 from datetime import datetime, timezone
 from uuid import uuid4
 
@@ -36,8 +37,21 @@ class OneClickCveBatchCancelled(Exception):
     pass
 
 
+class OneClickCveAgentTimeout(RuntimeError):
+    pass
+
+
 def _format_exception_message(exc: Exception) -> str:
     return str(exc).strip() or exc.__class__.__name__
+
+
+def _one_click_agent_timeout_message(timeout_seconds: int) -> str:
+    minutes = max(1, int(round(timeout_seconds / 60)))
+    return f"Agent审计任务超时：在一键CVE中单个项目审计时间超过{minutes}分钟，已停止"
+
+
+def _monotonic_seconds() -> float:
+    return time.monotonic()
 
 
 async def run_one_click_cve_batch(batch_id: str) -> None:
@@ -326,7 +340,7 @@ async def _create_agent_task(
         verification_level="sandbox",
         exclude_patterns=["node_modules", "__pycache__", ".git", "*.min.js", "dist", "build", "vendor"],
         max_iterations=settings.AGENT_MAX_ITERATIONS,
-        timeout_seconds=settings.AGENT_TIMEOUT_SECONDS,
+        timeout_seconds=getattr(settings, "ONE_CLICK_CVE_AGENT_TIMEOUT_SECONDS", 3000),
         agent_config={
             "finding_runtime_stack": getattr(settings, "FINDING_RUNTIME_STACK_DEFAULT", "runtime"),
             "one_click_cve_batch_id": batch_id,
@@ -357,6 +371,8 @@ async def _wait_for_task_completion(
     *,
     batch_id: str | None = None,
 ) -> None:
+    started_at = _monotonic_seconds()
+    timeout_seconds: int | None = None
     while run_task is None or not run_task.done():
         await asyncio.sleep(POLL_INTERVAL_SECONDS)
         await db.commit()
@@ -373,6 +389,25 @@ async def _wait_for_task_completion(
         task = await db.get(AgentTask, task_id, populate_existing=True)
         if task is None:
             raise RuntimeError("Agent task disappeared during one-click CVE run")
+        if timeout_seconds is None:
+            timeout_seconds = int(
+                task.timeout_seconds
+                if task.timeout_seconds is not None
+                else getattr(settings, "ONE_CLICK_CVE_AGENT_TIMEOUT_SECONDS", 3000)
+            )
+        if _monotonic_seconds() - started_at >= timeout_seconds:
+            timeout_message = _one_click_agent_timeout_message(timeout_seconds)
+            with contextlib.suppress(Exception):
+                request_agent_task_cancellation(task_id)
+            task.status = AgentTaskStatus.CANCELLED
+            task.error_message = timeout_message
+            task.completed_at = datetime.now(timezone.utc)
+            await db.commit()
+            if run_task is not None and not run_task.done():
+                run_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await run_task
+            raise OneClickCveAgentTimeout(timeout_message)
         if task.status in {AgentTaskStatus.COMPLETED, AgentTaskStatus.FAILED, AgentTaskStatus.CANCELLED}:
             break
     if run_task is not None:

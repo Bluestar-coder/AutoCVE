@@ -58,6 +58,12 @@ export interface ProviderOption {
   label: string;
   default_model: string;
   models: string[];
+  default_endpoint_protocol?: string;
+  supported_endpoint_protocols?: string[];
+  tool_capability?: Record<string, any>;
+  default_model_capabilities?: Record<string, any>;
+  model_capabilities?: Record<string, Record<string, any>>;
+  notes?: string;
 }
 
 export interface AgentModelTestResponse {

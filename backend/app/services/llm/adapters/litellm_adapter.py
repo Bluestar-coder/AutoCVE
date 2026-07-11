@@ -58,6 +58,9 @@ class LiteLLMAdapter(BaseLLMAdapter):
         LLMProvider.QWEN: "openai",  # 使用 OpenAI 兼容模式
         LLMProvider.ZHIPU: "openai",  # 使用 OpenAI 兼容模式
         LLMProvider.MOONSHOT: "openai",  # 使用 OpenAI 兼容模式
+        LLMProvider.MINIMAX: "openai",
+        LLMProvider.DOUBAO: "openai",
+        LLMProvider.MIMO: "openai",
         LLMProvider.OLLAMA: "ollama",
     }
 
@@ -67,6 +70,9 @@ class LiteLLMAdapter(BaseLLMAdapter):
         LLMProvider.ZHIPU,
         LLMProvider.MOONSHOT,
         LLMProvider.DEEPSEEK,
+        LLMProvider.MINIMAX,
+        LLMProvider.DOUBAO,
+        LLMProvider.MIMO,
     }
 
     def __init__(self, config: LLMConfig):

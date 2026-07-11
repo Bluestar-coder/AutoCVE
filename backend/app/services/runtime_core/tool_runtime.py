@@ -16,6 +16,9 @@ from app.services.finding_runtime.models import (
 )
 
 InterruptBehavior = Literal["cancel", "block"]
+DEFAULT_RUNTIME_TOOL_TIMEOUT_SECONDS = 120
+RUNTIME_SEARCH_TOOL_TIMEOUT_SECONDS = 180
+RUNTIME_TOOL_TIMEOUT_HINT = "工具执行超时：请缩小 path/glob/pattern 后重试。"
 
 
 @dataclass(slots=True)
@@ -85,6 +88,10 @@ class RuntimeTool:
 
     def requires_user_interaction(self) -> bool:
         return False
+
+    def execution_timeout_seconds(self, parsed_input: Any = None, context: "ToolExecutionContext | None" = None) -> float | None:
+        del parsed_input, context
+        return None
 
     async def check_permission(
         self,
@@ -400,11 +407,20 @@ def _classify_execution_error_kind(error: BaseException) -> str:
 
 
 class ToolOrchestrator:
-    def __init__(self, *, session_store, tool_registry: ToolRegistry, agent_type: str = "finding", permission_runtime: RuntimePermissionRuntime | None = None):
+    def __init__(
+        self,
+        *,
+        session_store,
+        tool_registry: ToolRegistry,
+        agent_type: str = "finding",
+        permission_runtime: RuntimePermissionRuntime | None = None,
+        default_tool_timeout_seconds: float | None = DEFAULT_RUNTIME_TOOL_TIMEOUT_SECONDS,
+    ):
         self._session_store = session_store
         self._tool_registry = tool_registry
         self._agent_type = agent_type
         self._permission_runtime = permission_runtime or RuntimePermissionRuntime(session_store=session_store, agent_type=agent_type)
+        self._default_tool_timeout_seconds = default_tool_timeout_seconds
 
     async def execute_tool_calls(
         self,
@@ -690,7 +706,33 @@ class ToolOrchestrator:
         self._emit_hook_event(event_name="PreToolUse", context=context, tool_name=request.name)
         context.report_progress(event="tool_start", message=f"Starting {prepared_call.tool.user_facing_name(prepared_call.parsed_input)}")
         try:
-            result = await prepared_call.tool.execute(prepared_call.parsed_input, context)
+            timeout_seconds = self._resolve_tool_timeout(prepared_call.tool, prepared_call.parsed_input, context)
+            execute_coro = prepared_call.tool.execute(prepared_call.parsed_input, context)
+            result = (
+                await asyncio.wait_for(execute_coro, timeout=timeout_seconds)
+                if timeout_seconds is not None and timeout_seconds > 0
+                else await execute_coro
+            )
+        except asyncio.TimeoutError:
+            timeout_seconds = self._resolve_tool_timeout(prepared_call.tool, prepared_call.parsed_input, context)
+            message = RUNTIME_TOOL_TIMEOUT_HINT
+            self._emit_hook_event(
+                event_name="PostToolUseFailure",
+                context=context,
+                tool_name=request.name,
+                payload={"error": message, "error_kind": "timeout_error", "timeout_seconds": timeout_seconds},
+            )
+            return self._finalize_error_record(
+                tool_call_id=tool_call_id,
+                request=request,
+                status=AuditToolCallStatus.FAILED.value,
+                is_concurrency_safe=prepared_call.is_concurrency_safe,
+                started=started,
+                message=message,
+                output_payload={"error_kind": "timeout_error", "timeout_seconds": timeout_seconds},
+                metadata={"error_kind": "timeout_error", "timeout_seconds": timeout_seconds},
+                lifecycle={**lifecycle, "progress_events": progress_events},
+            )
         except asyncio.CancelledError as exc:
             self._emit_hook_event(
                 event_name="PostToolUseFailure",
@@ -885,6 +927,26 @@ class ToolOrchestrator:
             duration_ms=duration_ms,
             lifecycle=dict(lifecycle or {}),
         )
+
+    def _resolve_tool_timeout(
+        self,
+        tool: RuntimeTool,
+        parsed_input: Any,
+        context: ToolExecutionContext,
+    ) -> float | None:
+        try:
+            timeout_seconds = tool.execution_timeout_seconds(parsed_input, context)
+        except Exception:
+            timeout_seconds = None
+        if timeout_seconds is None:
+            timeout_seconds = self._default_tool_timeout_seconds
+        if timeout_seconds is None:
+            return None
+        try:
+            resolved = float(timeout_seconds)
+        except (TypeError, ValueError):
+            return None
+        return resolved if resolved > 0 else None
 
 
 @dataclass(slots=True)

@@ -29,6 +29,7 @@ from app.services.runtime_core.tool_message_codec import (
     ToolMessageFormat,
     build_runtime_model_messages,
 )
+from app.services.llm.protocols.registry import resolve_tool_message_format
 
 READ_SAFE_RUNTIME_TOOLS = {"Read", "Glob", "Grep", "Skill"}
 REPORT_GENERATION_RUNTIME_TOOLS = {"Read", "Glob", "Grep"}
@@ -244,15 +245,11 @@ class RuntimeLLMModelClient:
         if not raw or str(raw).strip().lower() == "auto":
             endpoint_protocol = str(getattr(config, "endpoint_protocol", "") or "").strip().lower()
             provider = str(getattr(getattr(config, "provider", None), "value", None) or getattr(config, "provider", "") or "").strip().lower()
-            if endpoint_protocol in {"anthropic", "anthropic_messages"}:
-                return ToolMessageFormat.ANTHROPIC_BLOCKS
-            if endpoint_protocol in {"openai", "openai_compatible", "openai-compatible", "chat_completions"}:
-                return ToolMessageFormat.OPENAI_TOOLS
-            if provider in {"claude", "anthropic"}:
-                return ToolMessageFormat.ANTHROPIC_BLOCKS
-            return ToolMessageFormat.OPENAI_TOOLS
+            resolved = resolve_tool_message_format(endpoint_protocol, provider=provider, requested="auto")
+            return ToolMessageFormat(resolved)
         try:
-            return ToolMessageFormat(str(raw))
+            resolved = resolve_tool_message_format(getattr(config, "endpoint_protocol", None), provider=None, requested=str(raw))
+            return ToolMessageFormat(resolved)
         except ValueError:
             return ToolMessageFormat.OPENAI_TOOLS
 

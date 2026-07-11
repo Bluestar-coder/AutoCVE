@@ -47,6 +47,25 @@ const DEFAULT_GLOBAL_ENV = '{}';
 const DEFAULT_TEST_PROMPT =
   'Please tell me which skill metadata you currently know, what your current role is, and give one concrete example of how you would use those skills.';
 
+const DEFAULT_ENDPOINT_PROTOCOL = 'openai_chat';
+
+const ENDPOINT_PROTOCOL_LABELS: Record<string, string> = {
+  openai_chat: 'OpenAI Chat',
+  openai_responses: 'OpenAI Responses',
+  anthropic_messages: 'Anthropic Messages',
+  gemini_native: 'Gemini Native',
+  native: 'Native',
+};
+
+const TOOL_MESSAGE_FORMAT_LABELS: Record<string, string> = {
+  auto: 'Auto',
+  openai_tools: 'OpenAI Tools',
+  anthropic_blocks: 'Anthropic Blocks',
+  gemini_parts: 'Gemini Parts',
+  responses_items: 'Responses Items',
+  legacy_text: 'Legacy Text',
+};
+
 const AGENT_META: Record<AgentType, { label: string; description: string }> = {
   orchestrator: { label: 'Orchestrator', description: '编排审计流程和阶段分发' },
   recon: { label: 'Recon', description: '负责信息收集和入口发现' },
@@ -65,7 +84,7 @@ const DEFAULT_AGENT_CONFIG: AgentModelConfig = {
   llmTimeout: null,
   llmTemperature: null,
   llmMaxTokens: null,
-  endpointProtocol: 'openai_compatible',
+  endpointProtocol: DEFAULT_ENDPOINT_PROTOCOL,
   toolMessageFormat: 'auto',
   maxIterations: null,
   env: {},
@@ -137,6 +156,41 @@ function uniqueModels(models?: string[]): string[] {
   return Array.from(new Set((models || []).filter(Boolean)));
 }
 
+function normalizeEndpointProtocol(value?: string): string {
+  const aliases: Record<string, string> = {
+    openai: 'openai_chat',
+    openai_compatible: 'openai_chat',
+    'openai-compatible': 'openai_chat',
+    chat_completions: 'openai_chat',
+    anthropic: 'anthropic_messages',
+    claude: 'anthropic_messages',
+    google: 'gemini_native',
+    gemini: 'gemini_native',
+  };
+  const raw = (value || '').trim().toLowerCase();
+  return aliases[raw] || raw || DEFAULT_ENDPOINT_PROTOCOL;
+}
+
+function normalizeToolMessageFormat(value?: string): string {
+  const aliases: Record<string, string> = {
+    follow_protocol: 'auto',
+    xml: 'legacy_text',
+    json: 'legacy_text',
+    openai: 'openai_tools',
+    anthropic: 'anthropic_blocks',
+    gemini: 'gemini_parts',
+  };
+  const raw = (value || '').trim().toLowerCase();
+  return aliases[raw] || raw || 'auto';
+}
+
+function protocolOptionsForProvider(provider?: ProviderOption): string[] {
+  const options = provider?.supported_endpoint_protocols?.length
+    ? provider.supported_endpoint_protocols
+    : ['openai_chat', 'openai_responses', 'anthropic_messages', 'gemini_native'];
+  return uniqueModels(options.map(normalizeEndpointProtocol));
+}
+
 function createProfileId(): string {
   if (globalThis.crypto?.randomUUID) {
     return globalThis.crypto.randomUUID();
@@ -169,8 +223,8 @@ function cloneModelProfile(input?: Partial<ModelProfileConfig>): ModelProfileCon
     llmTimeout: input?.llmTimeout ?? null,
     llmTemperature: input?.llmTemperature ?? null,
     llmMaxTokens: input?.llmMaxTokens ?? null,
-    endpointProtocol: input?.endpointProtocol || 'openai_compatible',
-    toolMessageFormat: input?.toolMessageFormat || 'auto',
+    endpointProtocol: normalizeEndpointProtocol(input?.endpointProtocol),
+    toolMessageFormat: normalizeToolMessageFormat(input?.toolMessageFormat),
     env: input?.env || {},
   };
 }
@@ -273,7 +327,7 @@ export function SystemConfig() {
     llmTimeout: 150000,
     llmTemperature: 0.1,
     llmMaxTokens: 4096,
-    endpointProtocol: 'openai_compatible',
+    endpointProtocol: DEFAULT_ENDPOINT_PROTOCOL,
     toolMessageFormat: 'auto',
     env: {},
   });
@@ -324,6 +378,7 @@ export function SystemConfig() {
     : activeAgentConfig?.llmProvider || globalConfig.llmProvider || '';
   const activeModelValue = isGlobalScope ? globalConfig.llmModel || '' : activeAgentConfig?.llmModel || '';
   const activeProvider = providerMap[activeProviderValue];
+  const activeProtocolOptions = protocolOptionsForProvider(activeProvider);
   const activeEnvText = isGlobalScope ? globalEnvText : agentEnvTexts[activeAgent as AgentType] || DEFAULT_GLOBAL_ENV;
 
   useEffect(() => {
@@ -345,8 +400,8 @@ export function SystemConfig() {
         llmTimeout: llmConfig.llmTimeout ?? 150000,
         llmTemperature: llmConfig.llmTemperature ?? 0.1,
         llmMaxTokens: llmConfig.llmMaxTokens ?? 4096,
-        endpointProtocol: llmConfig.endpointProtocol || 'openai_compatible',
-        toolMessageFormat: llmConfig.toolMessageFormat || 'auto',
+        endpointProtocol: normalizeEndpointProtocol(llmConfig.endpointProtocol),
+        toolMessageFormat: normalizeToolMessageFormat(llmConfig.toolMessageFormat),
         env: llmConfig.env || {},
       };
       setGlobalConfig(nextGlobal);
@@ -395,9 +450,12 @@ export function SystemConfig() {
   }
 
   function updateActiveProvider(value: string) {
+    const provider = providerMap[value];
     updateActiveConfig({
       llmProvider: value,
-      llmModel: providerMap[value]?.default_model || '',
+      llmModel: provider?.default_model || '',
+      endpointProtocol: normalizeEndpointProtocol(provider?.default_endpoint_protocol),
+      toolMessageFormat: 'auto',
     });
   }
 
@@ -420,8 +478,8 @@ export function SystemConfig() {
       llmTimeout: profile.llmTimeout ?? null,
       llmTemperature: profile.llmTemperature ?? null,
       llmMaxTokens: profile.llmMaxTokens ?? null,
-      endpointProtocol: profile.endpointProtocol || 'openai_compatible',
-      toolMessageFormat: profile.toolMessageFormat || 'auto',
+      endpointProtocol: normalizeEndpointProtocol(profile.endpointProtocol),
+      toolMessageFormat: normalizeToolMessageFormat(profile.toolMessageFormat),
       env: profile.env || {},
     });
     setGlobalEnvText(stringifyEnvPayload(profile.env));
@@ -837,33 +895,36 @@ export function SystemConfig() {
           <div className={cn(SOFT_PANEL_CLASS, 'p-4')}>
             <Label className="text-sm font-bold text-slate-800">Endpoint Protocol</Label>
             <Select
-              value={(isGlobalScope ? globalConfig.endpointProtocol : activeAgentConfig?.endpointProtocol) || 'openai_compatible'}
-              onValueChange={(value) => updateActiveConfig({ endpointProtocol: value })}
+              value={normalizeEndpointProtocol(isGlobalScope ? globalConfig.endpointProtocol : activeAgentConfig?.endpointProtocol)}
+              onValueChange={(value) => updateActiveConfig({ endpointProtocol: normalizeEndpointProtocol(value) })}
             >
               <SelectTrigger className={cn(INPUT_CLASS, 'mt-2')}>
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="openai_compatible">OpenAI Compatible</SelectItem>
-                <SelectItem value="anthropic">Anthropic</SelectItem>
-                <SelectItem value="google">Google</SelectItem>
+                {activeProtocolOptions.map((protocol) => (
+                  <SelectItem key={protocol} value={protocol}>
+                    {ENDPOINT_PROTOCOL_LABELS[protocol] || protocol}
+                  </SelectItem>
+                ))}
               </SelectContent>
             </Select>
           </div>
           <div className={cn(SOFT_PANEL_CLASS, 'p-4')}>
             <Label className="text-sm font-bold text-slate-800">Tool Message Format</Label>
             <Select
-              value={(isGlobalScope ? globalConfig.toolMessageFormat : activeAgentConfig?.toolMessageFormat) || 'auto'}
-              onValueChange={(value) => updateActiveConfig({ toolMessageFormat: value })}
+              value={normalizeToolMessageFormat(isGlobalScope ? globalConfig.toolMessageFormat : activeAgentConfig?.toolMessageFormat)}
+              onValueChange={(value) => updateActiveConfig({ toolMessageFormat: normalizeToolMessageFormat(value) })}
             >
               <SelectTrigger className={cn(INPUT_CLASS, 'mt-2')}>
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="auto">Auto</SelectItem>
-                <SelectItem value="follow_protocol">Follow Protocol</SelectItem>
-                <SelectItem value="xml">XML</SelectItem>
-                <SelectItem value="json">JSON</SelectItem>
+                {Object.entries(TOOL_MESSAGE_FORMAT_LABELS).map(([value, label]) => (
+                  <SelectItem key={value} value={value}>
+                    {label}
+                  </SelectItem>
+                ))}
               </SelectContent>
             </Select>
           </div>
@@ -1094,6 +1155,8 @@ export function SystemConfig() {
                       updateEditProfileDraft({
                         llmProvider: value,
                         llmModel: providerMap[value]?.default_model || editProfileDraft.llmModel,
+                        endpointProtocol: normalizeEndpointProtocol(providerMap[value]?.default_endpoint_protocol),
+                        toolMessageFormat: 'auto',
                       })
                     }
                   >
@@ -1151,16 +1214,18 @@ export function SystemConfig() {
                 <div className={cn(SOFT_PANEL_CLASS, 'p-4')}>
                   <Label className="text-sm font-bold text-slate-800">Endpoint Protocol</Label>
                   <Select
-                    value={editProfileDraft.endpointProtocol || 'openai_compatible'}
-                    onValueChange={(value) => updateEditProfileDraft({ endpointProtocol: value })}
+                    value={normalizeEndpointProtocol(editProfileDraft.endpointProtocol)}
+                    onValueChange={(value) => updateEditProfileDraft({ endpointProtocol: normalizeEndpointProtocol(value) })}
                   >
                     <SelectTrigger className={cn(INPUT_CLASS, 'mt-2')}>
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="openai_compatible">OpenAI Compatible</SelectItem>
-                      <SelectItem value="anthropic">Anthropic</SelectItem>
-                      <SelectItem value="google">Google</SelectItem>
+                      {protocolOptionsForProvider(providerMap[editProfileDraft.llmProvider || '']).map((protocol) => (
+                        <SelectItem key={protocol} value={protocol}>
+                          {ENDPOINT_PROTOCOL_LABELS[protocol] || protocol}
+                        </SelectItem>
+                      ))}
                     </SelectContent>
                   </Select>
                 </div>
@@ -1168,17 +1233,18 @@ export function SystemConfig() {
                 <div className={cn(SOFT_PANEL_CLASS, 'p-4')}>
                   <Label className="text-sm font-bold text-slate-800">Tool Message Format</Label>
                   <Select
-                    value={editProfileDraft.toolMessageFormat || 'auto'}
-                    onValueChange={(value) => updateEditProfileDraft({ toolMessageFormat: value })}
+                    value={normalizeToolMessageFormat(editProfileDraft.toolMessageFormat)}
+                    onValueChange={(value) => updateEditProfileDraft({ toolMessageFormat: normalizeToolMessageFormat(value) })}
                   >
                     <SelectTrigger className={cn(INPUT_CLASS, 'mt-2')}>
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="auto">Auto</SelectItem>
-                      <SelectItem value="follow_protocol">Follow Protocol</SelectItem>
-                      <SelectItem value="xml">XML</SelectItem>
-                      <SelectItem value="json">JSON</SelectItem>
+                      {Object.entries(TOOL_MESSAGE_FORMAT_LABELS).map(([value, label]) => (
+                        <SelectItem key={value} value={value}>
+                          {label}
+                        </SelectItem>
+                      ))}
                     </SelectContent>
                   </Select>
                 </div>

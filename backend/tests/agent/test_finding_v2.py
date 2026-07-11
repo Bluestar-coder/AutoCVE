@@ -116,6 +116,21 @@ def test_analysis_workflow_synthesizes_thought_for_action_only_structured_respon
     assert step.thought == "Searching the codebase for 'glueSource'."
 
 
+def test_finding_runtime_incomplete_error_distinguishes_timeout_from_finalize_failure():
+    message = FindingAgent._format_incomplete_runtime_error(
+        {
+            "runtime_error": {
+                "stop_reason": "timeout",
+                "message": "Agent 审计超时：一键 CVE 单项目审计超过 40 分钟",
+            }
+        }
+    )
+
+    assert "超时" in message
+    assert "40 分钟" in message
+    assert "without FinalizeFinding" not in message
+
+
 @pytest.mark.asyncio
 async def test_analysis_workflow_emits_completion_events_for_fallback_results():
     agent = DummyWorkflowAgent()

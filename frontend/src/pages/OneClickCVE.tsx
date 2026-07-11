@@ -44,7 +44,7 @@ import {
 
 const ACTIVE_STATUSES = new Set(["pending", "running"]);
 const TARGET_COUNT_MIN = 1;
-const TARGET_COUNT_MAX = 20;
+const TARGET_COUNT_MAX = 10;
 
 function errorMessage(error: unknown, fallback: string) {
   if (typeof error === "object" && error && "response" in error) {
@@ -191,7 +191,7 @@ export default function OneClickCVE() {
   async function startBatch() {
     const requestedCount = Number(targetCount);
     if (!Number.isInteger(requestedCount) || requestedCount < TARGET_COUNT_MIN || requestedCount > TARGET_COUNT_MAX) {
-      const message = "请输入 1-20 之间的整数";
+      const message = "请输入 1-10 之间的整数";
       setTargetCountError(message);
       toast.error(message);
       return;
@@ -434,7 +434,7 @@ export default function OneClickCVE() {
               <div className="mb-2 flex items-center justify-between gap-3">
                 <label className="text-sm font-semibold text-slate-900">目标漏洞数量</label>
                 <span className="rounded-full border border-[#d8e6de] bg-[#f7fbf8] px-2.5 py-1 text-xs font-medium text-[#5f7567]">
-                  1-20
+                  1-10
                 </span>
               </div>
               <Input
@@ -449,10 +449,10 @@ export default function OneClickCVE() {
                   setTargetCountError("");
                 }}
                 className="h-12 rounded-2xl border-[#cfded5] bg-[#fbfdfb] text-base font-semibold text-slate-950 shadow-inner focus-visible:ring-[#6d9a76]"
-                placeholder="输入 1-20 之间的整数"
+                placeholder="输入 1-10 之间的整数"
               />
               <div className={`mt-2 text-xs ${targetCountError ? "text-red-600" : "text-slate-500"}`}>
-                {targetCountError || "仅支持 1-20 之间的整数"}
+                {targetCountError || "仅支持 1-10 之间的整数"}
               </div>
             </div>
 
