@@ -235,6 +235,8 @@ docker compose up -d --build
 >
 > * 📧 **Email：** [359111529@qq.com](mailto:359111529@qq.com)
 > * 🐙 **GitHub：** [@larlarua](https://github.com/larlarua)
+> * 📖 **公众号文章：** [我开发了一个专门挖 CVE 的 Agent，一周拿到 30 个 CVE 编号](https://mp.weixin.qq.com/s/2dIa0NEtX_3cm2euGVGOyg)
+> * 💬 **微信交流群：** 请查看 [AutoCVE 微信交流群说明](https://github.com/larlarua/AutoCVE/issues/34)
 
 ---
 
