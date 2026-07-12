@@ -50,6 +50,7 @@ class LLMService:
                     "llmBaseUrl",
                     "llmTimeout",
                     "llmTemperature",
+                    "llmTopP",
                     "llmMaxTokens",
                     "llmCustomHeaders",
                     "llmFirstTokenTimeout",
@@ -228,7 +229,8 @@ class LLMService:
             except (TypeError, ValueError):
                 timeout_ms = None
         timeout = int(timeout_ms / 1000) if timeout_ms and timeout_ms > 1000 else int(timeout_ms or getattr(settings, "LLM_TIMEOUT", 300))
-        temperature = user_llm_config.get("llmTemperature") if user_llm_config.get("llmTemperature") is not None else float(getattr(settings, "LLM_TEMPERATURE", 0.1))
+        temperature = user_llm_config.get("llmTemperature")
+        top_p = user_llm_config.get("llmTopP")
         max_tokens = int(user_llm_config.get("llmMaxTokens") or getattr(settings, "LLM_MAX_TOKENS", 4096))
         endpoint_protocol = canonical_endpoint_protocol(
             user_llm_config.get("endpointProtocol")
@@ -248,6 +250,7 @@ class LLMService:
             timeout=timeout,
             temperature=temperature,
             max_tokens=max_tokens,
+            top_p=top_p,
             endpoint_protocol=endpoint_protocol,
             tool_message_format=tool_message_format,
         )
@@ -383,10 +386,17 @@ class LLMService:
         )
 
 
-    async def _execute_chat_completion_stream(self, adapter: Any, request: LLMRequest, config: LLMConfig):
+    async def _execute_chat_completion_stream(
+        self,
+        adapter: Any,
+        request: LLMRequest,
+        config: LLMConfig,
+        *,
+        retry_enabled: bool = True,
+    ):
         semaphore = self._get_provider_semaphore(config)
         retry_config = RetryConfig(
-            max_attempts=LLM_RETRY_CONFIG.max_attempts,
+            max_attempts=LLM_RETRY_CONFIG.max_attempts if retry_enabled else 1,
             base_delay=LLM_RETRY_CONFIG.base_delay,
             max_delay=LLM_RETRY_CONFIG.max_delay,
             exponential_base=LLM_RETRY_CONFIG.exponential_base,
@@ -623,8 +633,9 @@ class LLMService:
         adapter = LLMFactory.create_adapter(config)
         request = LLMRequest(
             messages=[LLMMessage.from_dict(item) for item in messages],
-            temperature=temperature,
+            temperature=temperature if temperature is not None else config.temperature,
             max_tokens=max_tokens,
+            top_p=config.top_p,
             tools=tools,
             parallel_tool_calls=parallel_tool_calls,
             stream=False,
@@ -669,20 +680,27 @@ class LLMService:
         agent_type: Optional[str] = None,
         tools: Optional[List[Dict[str, Any]]] = None,
         parallel_tool_calls: Optional[bool] = None,
+        retry_enabled: bool = True,
     ) -> AsyncGenerator[Dict[str, Any], None]:
         config = self.get_agent_config(agent_type)
         adapter = LLMFactory.create_adapter(config)
         request = LLMRequest(
             messages=[LLMMessage.from_dict(item) for item in messages],
-            temperature=temperature,
+            temperature=temperature if temperature is not None else config.temperature,
             max_tokens=max_tokens,
+            top_p=config.top_p,
             tools=tools,
             parallel_tool_calls=parallel_tool_calls,
             stream=True,
         )
         stream_complete = getattr(adapter, "stream_complete", None)
         if callable(stream_complete):
-            async for event in self._execute_chat_completion_stream(adapter, request, config):
+            async for event in self._execute_chat_completion_stream(
+                adapter,
+                request,
+                config,
+                retry_enabled=retry_enabled,
+            ):
                 yield event
             return
 

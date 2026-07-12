@@ -139,6 +139,7 @@ class Settings(BaseSettings):
     ONE_CLICK_CVE_WORKER_MAX_TRIES: int = 1
     ONE_CLICK_CVE_MAX_REPOSITORY_SIZE_KB: int = 512000
     ONE_CLICK_CVE_AGENT_TIMEOUT_SECONDS: int = 3000
+    AUDIT_SESSION_RESUME_TIMEOUT_SECONDS: int = 3000
     REDIS_URL: str = "redis://localhost:6379/0"
     FINDING_RUNTIME_STACK_DEFAULT: str = "runtime"
     SANDBOX_IMAGE: str = "autocve-sandbox:latest"

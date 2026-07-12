@@ -65,7 +65,11 @@ def test_grep_defaults_to_250_results():
     parsed = grep.validate_input({"pattern": "dangerous"})
 
     assert parsed.max_results == 250
-    assert grep.execution_timeout_seconds(parsed, build_context()) == 180
+    assert parsed.timeout_seconds == 45
+    assert grep.execution_timeout_seconds(parsed, build_context()) == 47
+
+    extended = grep.validate_input({"pattern": "dangerous", "timeout_seconds": 120})
+    assert grep.execution_timeout_seconds(extended, build_context()) == 122
 
 
 async def test_grep_caps_requested_results_to_250_and_warns():
@@ -86,7 +90,11 @@ def test_glob_defaults_to_100_files():
     parsed = glob.validate_input({"pattern": "**/*.py"})
 
     assert parsed.max_results == 100
-    assert glob.execution_timeout_seconds(parsed, build_context()) == 180
+    assert parsed.timeout_seconds == 45
+    assert glob.execution_timeout_seconds(parsed, build_context()) == 47
+
+    extended = glob.validate_input({"pattern": "**/*.py", "timeout_seconds": 120})
+    assert glob.execution_timeout_seconds(extended, build_context()) == 122
 
 
 async def test_glob_caps_requested_files_to_100_and_warns():

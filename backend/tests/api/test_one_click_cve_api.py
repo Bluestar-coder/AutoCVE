@@ -127,6 +127,7 @@ async def test_create_one_click_cve_batch_can_disable_security_advisory_preferen
 
     monkeypatch.setattr(one_click_cve_endpoint, "run_one_click_cve_batch", fake_run_batch)
     monkeypatch.setattr(one_click_cve_endpoint, "_preflight_one_click_cve_llm", fail_preflight, raising=False)
+    monkeypatch.setattr(one_click_cve_endpoint, "should_use_one_click_cve_worker_queue", lambda: False)
 
     app = build_test_app()
 
@@ -190,6 +191,7 @@ async def test_create_one_click_cve_batch_returns_immediately_when_llm_preflight
 
     monkeypatch.setattr(one_click_cve_endpoint, "run_one_click_cve_batch", fake_run_batch)
     monkeypatch.setattr(one_click_cve_endpoint, "_preflight_one_click_cve_llm", fail_preflight, raising=False)
+    monkeypatch.setattr(one_click_cve_endpoint, "should_use_one_click_cve_worker_queue", lambda: False)
 
     app = build_test_app()
 

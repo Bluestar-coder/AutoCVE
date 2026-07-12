@@ -100,7 +100,9 @@ class LLMFactory:
         api_key_prefix = config.api_key[:8] if config.api_key else "no-key"
         return (
             f"{config.provider.value}:{config.model}:{config.base_url or ''}:"
-            f"{canonical_endpoint_protocol(config.endpoint_protocol)}:{config.tool_message_format}:{api_key_prefix}"
+            f"{canonical_endpoint_protocol(config.endpoint_protocol)}:{config.tool_message_format}:{api_key_prefix}:"
+            f"{config.timeout}:{config.temperature}:{config.max_tokens}:{config.top_p}:"
+            f"{config.frequency_penalty}:{config.presence_penalty}"
         )
 
     @classmethod

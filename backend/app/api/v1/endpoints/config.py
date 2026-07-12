@@ -64,7 +64,8 @@ class AgentModelConfigSchema(BaseModel):
     llmModel: Optional[str] = None
     llmBaseUrl: Optional[str] = None
     llmTimeout: Optional[int] = None
-    llmTemperature: Optional[float] = None
+    llmTemperature: Optional[float] = Field(default=None, ge=0, le=2)
+    llmTopP: Optional[float] = Field(default=None, ge=0, le=1)
     llmMaxTokens: Optional[int] = None
     endpointProtocol: Optional[str] = None
     toolMessageFormat: Optional[str] = None
@@ -82,7 +83,8 @@ class ModelProfileSchema(BaseModel):
     llmModel: Optional[str] = None
     llmBaseUrl: Optional[str] = None
     llmTimeout: Optional[int] = None
-    llmTemperature: Optional[float] = None
+    llmTemperature: Optional[float] = Field(default=None, ge=0, le=2)
+    llmTopP: Optional[float] = Field(default=None, ge=0, le=1)
     llmMaxTokens: Optional[int] = None
     endpointProtocol: Optional[str] = None
     toolMessageFormat: Optional[str] = None
@@ -95,7 +97,8 @@ class LLMConfigSchema(BaseModel):
     llmModel: Optional[str] = None
     llmBaseUrl: Optional[str] = None
     llmTimeout: Optional[int] = None
-    llmTemperature: Optional[float] = None
+    llmTemperature: Optional[float] = Field(default=None, ge=0, le=2)
+    llmTopP: Optional[float] = Field(default=None, ge=0, le=1)
     llmMaxTokens: Optional[int] = None
     endpointProtocol: Optional[str] = None
     toolMessageFormat: Optional[str] = None
@@ -152,6 +155,8 @@ class LLMConnectionTestRequest(BaseModel):
     apiKey: Optional[str] = None
     model: Optional[str] = None
     baseUrl: Optional[str] = None
+    temperature: Optional[float] = Field(default=None, ge=0, le=2)
+    topP: Optional[float] = Field(default=None, ge=0, le=1)
     endpointProtocol: Optional[str] = None
     toolMessageFormat: Optional[str] = None
     prompt: str = "请只回复：模型连接成功。"
@@ -210,6 +215,7 @@ def _default_agent_configs() -> Dict[str, Dict[str, Any]]:
             "llmBaseUrl": "",
             "llmTimeout": None,
             "llmTemperature": None,
+            "llmTopP": None,
             "llmMaxTokens": None,
             "maxIterations": None,
             "env": {},
@@ -364,7 +370,8 @@ def get_default_config() -> Dict[str, Any]:
             "llmModel": settings.LLM_MODEL or "",
             "llmBaseUrl": settings.LLM_BASE_URL or "",
             "llmTimeout": int(settings.LLM_TIMEOUT * 1000),
-            "llmTemperature": settings.LLM_TEMPERATURE,
+            "llmTemperature": None,
+            "llmTopP": None,
             "llmMaxTokens": settings.LLM_MAX_TOKENS,
             "endpointProtocol": getattr(settings, "LLM_ENDPOINT_PROTOCOL", "openai_chat"),
             "toolMessageFormat": getattr(settings, "LLM_TOOL_MESSAGE_FORMAT", "auto"),
@@ -457,6 +464,7 @@ def _build_test_user_config(saved_config: Dict[str, Any], agent_type: Optional[s
                 "llmBaseUrl",
                 "llmTimeout",
                 "llmTemperature",
+                "llmTopP",
                 "llmMaxTokens",
                 "endpointProtocol",
                 "toolMessageFormat",
@@ -470,6 +478,38 @@ def _build_test_user_config(saved_config: Dict[str, Any], agent_type: Optional[s
                 base_env = payload["llmConfig"].get("env") if isinstance(payload["llmConfig"].get("env"), dict) else {}
                 payload["llmConfig"]["env"] = {**base_env, **override_env}
     return payload
+
+
+def _apply_llm_connection_test_overrides(
+    llm_config: Dict[str, Any], payload: LLMConnectionTestRequest
+) -> None:
+    """Apply the unsaved values shown in the global model form to a test config."""
+    llm_config["llmProvider"] = payload.provider
+    provider_key = PROVIDER_KEY_MAP.get(payload.provider.lower())
+    if payload.apiKey is not None:
+        llm_config["llmApiKey"] = payload.apiKey
+        if provider_key:
+            llm_config[provider_key] = payload.apiKey
+    if payload.model is not None:
+        llm_config["llmModel"] = payload.model
+    if payload.baseUrl is not None:
+        llm_config["llmBaseUrl"] = payload.baseUrl
+    if "temperature" in payload.model_fields_set:
+        llm_config["llmTemperature"] = payload.temperature
+    if "topP" in payload.model_fields_set:
+        llm_config["llmTopP"] = payload.topP
+    if payload.endpointProtocol is not None:
+        llm_config["endpointProtocol"] = payload.endpointProtocol
+    if payload.toolMessageFormat is not None:
+        llm_config["toolMessageFormat"] = payload.toolMessageFormat
+
+
+def _explicit_sampling_updates(config: LLMConfigSchema) -> Dict[str, Optional[float]]:
+    return {
+        field: getattr(config, field)
+        for field in ("llmTemperature", "llmTopP")
+        if field in config.model_fields_set
+    }
 
 
 @router.get("/defaults")
@@ -502,6 +542,7 @@ async def update_my_config(
         existing_llm = json.loads(record.llm_config) if record.llm_config else {}
         existing_llm = _decrypt_config(existing_llm, SENSITIVE_LLM_FIELDS)
         incoming_llm = config_in.llmConfig.model_dump(exclude_none=True, exclude_unset=True)
+        incoming_llm.update(_explicit_sampling_updates(config_in.llmConfig))
         if "agentConfigs" in incoming_llm:
             incoming_llm["agentConfigs"] = {
                 **(existing_llm.get("agentConfigs") or {}),
@@ -545,21 +586,8 @@ async def test_llm_connection(
     record = await _get_user_config_record(db, current_user.id)
     merged = _merge_user_config(record)
     test_user_config = _build_test_user_config(merged)
-    provider_key = PROVIDER_KEY_MAP.get(payload.provider.lower())
     llm_config = test_user_config["llmConfig"]
-    llm_config["llmProvider"] = payload.provider
-    if payload.apiKey is not None:
-        llm_config["llmApiKey"] = payload.apiKey
-        if provider_key:
-            llm_config[provider_key] = payload.apiKey
-    if payload.model is not None:
-        llm_config["llmModel"] = payload.model
-    if payload.baseUrl is not None:
-        llm_config["llmBaseUrl"] = payload.baseUrl
-    if payload.endpointProtocol is not None:
-        llm_config["endpointProtocol"] = payload.endpointProtocol
-    if payload.toolMessageFormat is not None:
-        llm_config["toolMessageFormat"] = payload.toolMessageFormat
+    _apply_llm_connection_test_overrides(llm_config, payload)
 
     try:
         llm_service = LLMService(user_config=test_user_config)
@@ -591,7 +619,7 @@ async def test_agent_model(
 
     record = await _get_user_config_record(db, current_user.id)
     merged = _merge_user_config(record)
-    override = payload.agent_model_config.model_dump(exclude_none=True) if payload.agent_model_config else None
+    override = payload.agent_model_config.model_dump(exclude_unset=True) if payload.agent_model_config else None
     test_user_config = _build_test_user_config(merged, payload.agent_type, override)
 
     skill_context = {"metadata": [], "matched": []}

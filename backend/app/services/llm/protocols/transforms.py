@@ -185,6 +185,8 @@ def openai_responses_payload(request: LLMRequest, *, model: str) -> dict[str, An
         payload["max_output_tokens"] = request.max_tokens
     if request.temperature is not None:
         payload["temperature"] = request.temperature
+    if request.top_p is not None:
+        payload["top_p"] = request.top_p
     return payload
 
 

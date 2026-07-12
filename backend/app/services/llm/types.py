@@ -31,9 +31,9 @@ class LLMConfig:
     model: str
     base_url: Optional[str] = None
     timeout: int = 300
-    temperature: float = 0.2
+    temperature: Optional[float] = None
     max_tokens: int = 4096
-    top_p: float = 1.0
+    top_p: Optional[float] = None
     frequency_penalty: float = 0
     presence_penalty: float = 0
     endpoint_protocol: str = "openai_compatible"

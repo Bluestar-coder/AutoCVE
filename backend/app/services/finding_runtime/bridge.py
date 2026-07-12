@@ -35,6 +35,7 @@ READ_SAFE_RUNTIME_TOOLS = {"Read", "Glob", "Grep", "Skill"}
 REPORT_GENERATION_RUNTIME_TOOLS = {"Read", "Glob", "Grep"}
 INTERNAL_TOOL_NAMES = {"think", "reflect", "load_skill_body", "skill_resource_lookup"}
 AUTO_FINALIZER_PROMPTS_ENABLED = True
+RESUME_TERMINAL_ACTION_NUDGE_LIMIT = 5
 RUNTIME_FINALIZATION_PROMPT = (
     "你正在处理 Finding 阶段的最终提交恢复流程。\n\n"
     "不要因为当前已经存在一个完整漏洞就直接结束。FinalizeFinding 是终点工具，调用成功后审计会立即停止。\n\n"
@@ -67,6 +68,19 @@ class RuntimeLLMModelClient:
     def __init__(self, *, llm_service, agent_type: str = "finding"):
         self._llm_service = llm_service
         self._agent_type = agent_type
+
+    @staticmethod
+    def _finding_stream_retry_override(stream_fn: Callable[..., Any]) -> dict[str, Any]:
+        """Disable LLMService retries when QueryLoop owns the retry budget."""
+        try:
+            parameters = inspect.signature(stream_fn).parameters.values()
+        except (TypeError, ValueError):
+            return {}
+        if any(parameter.kind is inspect.Parameter.VAR_KEYWORD for parameter in parameters):
+            return {"retry_enabled": False}
+        if any(parameter.name == "retry_enabled" for parameter in parameters):
+            return {"retry_enabled": False}
+        return {}
 
     async def complete(
         self,
@@ -130,6 +144,7 @@ class RuntimeLLMModelClient:
             tools=[self._to_llm_tool_schema(item) for item in tool_definitions],
             parallel_tool_calls=True,
             max_tokens=max_output_tokens_override,
+            **self._finding_stream_retry_override(self._llm_service.chat_completion_stream),
         ):
             if on_event is not None:
                 maybe_awaitable = on_event(event)
@@ -184,6 +199,7 @@ class RuntimeLLMModelClient:
                 tools=[self._to_llm_tool_schema(item) for item in tool_definitions],
                 parallel_tool_calls=True,
                 max_tokens=max_output_tokens_override,
+                **self._finding_stream_retry_override(stream_fn),
             ):
                 normalized = self._normalize_stream_event(event, accumulated=accumulated)
                 if normalized is None:
@@ -681,6 +697,8 @@ class FindingRuntimeBridge:
             tool_registry=tool_registry,
             tool_orchestrator=tool_orchestrator,
             max_turns=max_turns,
+            require_terminal_action=True,
+            terminal_action_nudge_limit=RESUME_TERMINAL_ACTION_NUDGE_LIMIT,
         )
         adapter = FindingRuntimeAdapter(
             session_store=self._session_store,
@@ -688,6 +706,22 @@ class FindingRuntimeBridge:
             skill_catalog=RuntimeSkillCatalog(),
             memory_manager=RuntimeMemoryManager(session_factory=self._session_store._session_factory),
         )
+        self._session_store.append_message(
+            session_id,
+            TranscriptItem(
+                role=RuntimeMessageRole.USER,
+                name="runtime_resume",
+                content=(
+                    "这是一次从上一个完整审计边界恢复的任务。请基于已有审计记录继续检查尚未完成的高价值候选，"
+                    "不要把之前的中断或自然语言总结当作完成。只有确实完成审计后，才调用 FinalizeFinding 提交结构化结果；"
+                    "若仍需证据，请继续调用工具。"
+                ),
+                metadata={"kind": "runtime_resume_instruction"},
+            ),
+        )
+        # Refresh after appending the instruction: QueryLoop reads its persisted
+        # transcript state first, so refreshing before this append would make the
+        # resume instruction visible in the database but invisible to the model.
         await adapter.refresh_session_context(session_id=session_id)
         runner_result = await runner.run_once(session_id=session_id, model_name=model_name)
         snapshot = self._session_store.load_session_snapshot(session_id)

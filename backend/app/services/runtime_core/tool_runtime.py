@@ -17,7 +17,8 @@ from app.services.finding_runtime.models import (
 
 InterruptBehavior = Literal["cancel", "block"]
 DEFAULT_RUNTIME_TOOL_TIMEOUT_SECONDS = 120
-RUNTIME_SEARCH_TOOL_TIMEOUT_SECONDS = 180
+RUNTIME_SEARCH_TOOL_TIMEOUT_SECONDS = 45
+RUNTIME_SEARCH_TOOL_MAX_TIMEOUT_SECONDS = 120
 RUNTIME_TOOL_TIMEOUT_HINT = "工具执行超时：请缩小 path/glob/pattern 后重试。"
 
 
@@ -1022,20 +1023,31 @@ class StreamingToolExecutor:
         return dict(self._current_context)
 
     async def get_remaining_updates(self) -> AsyncGenerator[ToolExecutionUpdate, None]:
-        while self._has_unfinished_tools():
-            await self._start_ready_tools()
+        try:
+            while self._has_unfinished_tools():
+                await self._start_ready_tools()
 
-            yielded = False
+                yielded = False
+                for update in self._drain_updates():
+                    yielded = True
+                    yield update
+
+                if not yielded and self._has_unfinished_tools():
+                    await self._event.wait()
+                    self._event.clear()
+
             for update in self._drain_updates():
-                yielded = True
                 yield update
-
-            if not yielded and self._has_unfinished_tools():
-                await self._event.wait()
-                self._event.clear()
-
-        for update in self._drain_updates():
-            yield update
+        except asyncio.CancelledError:
+            self.discard()
+            running = [
+                tracked.task
+                for tracked in self._tracked_tools
+                if tracked.task is not None and not tracked.task.done()
+            ]
+            if running:
+                await asyncio.gather(*running, return_exceptions=True)
+            raise
 
     async def _start_ready_tools(self) -> None:
         for tracked in self._tracked_tools:

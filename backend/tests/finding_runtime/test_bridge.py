@@ -54,9 +54,9 @@ class FakeLLMService:
             return {"content": "{}", "finish_reason": "stop"}
         return self.responses.pop(0)
 
-    async def chat_completion_stream(self, *, messages, agent_type, tools, parallel_tool_calls, max_tokens=None):
+    async def chat_completion_stream(self, *, messages, agent_type, tools, parallel_tool_calls, max_tokens=None, retry_enabled=True):
         assert agent_type == "finding"
-        self.calls.append({"messages": messages, "tools": tools, "max_tokens": max_tokens, "stream": True})
+        self.calls.append({"messages": messages, "tools": tools, "max_tokens": max_tokens, "stream": True, "retry_enabled": retry_enabled})
         if not self.responses:
             yield {"type": "done", "content": "{}", "usage": {}, "tool_calls": []}
             return
@@ -258,6 +258,45 @@ def test_bridge_run_requires_terminal_action_for_main_audit_runner(monkeypatch):
 
     assert captured_runner_kwargs[0]["require_terminal_action"] is True
     assert captured_runner_kwargs[0]["terminal_action_nudge_limit"] == 2
+
+
+def test_continue_dialogue_session_syncs_resume_instruction_and_nudges_empty_response():
+    session_factory = build_session_factory()
+    llm = FakeLLMService(
+        responses=[
+            [
+                {
+                    "type": "done",
+                    "content": "",
+                    "reasoning_content": "",
+                    "finish_reason": "stop",
+                    "tool_calls": [],
+                    "usage": {},
+                }
+            ]
+        ]
+    )
+    bridge = FindingRuntimeBridge(llm_service=llm, tools={}, session_factory=session_factory)
+    session_id = bridge._session_store.create_session(project_id="project-1", system_prompt="system")
+    bridge._session_store.append_message(
+        session_id,
+        TranscriptItem(role=RuntimeMessageRole.USER, content="continue the audit"),
+    )
+
+    asyncio.run(
+        bridge.continue_dialogue_session(
+            session_id=session_id,
+            model_name="finding-runtime",
+            max_turns=1,
+        )
+    )
+
+    snapshot = bridge._session_store.load_session_snapshot(session_id)
+    state = bridge._session_store.load_query_loop_state(session_id)
+    assert snapshot.messages[-1].name == "runtime_resume"
+    assert any(message.name == "runtime_resume" for message in state.messages)
+    assert state.messages[-1].name == "empty_model_response_nudge"
+    assert snapshot.checkpoints[-1].state_payload["error_kind"] == "empty_model_response"
 
 
 def test_agent_runtime_bridge_uses_finding_spec_without_changing_runner_contract(monkeypatch):
@@ -990,8 +1029,8 @@ def test_continue_session_until_payload_adds_auto_finalizer_prompt(monkeypatch):
 
 def test_runtime_model_client_stream_complete_emits_tool_call_events_before_done():
     class StreamingLLMService(FakeLLMService):
-        async def chat_completion_stream(self, *, messages, agent_type, tools, parallel_tool_calls, max_tokens=None):
-            self.calls.append({"messages": messages, "tools": tools, "max_tokens": max_tokens, "streaming": True})
+        async def chat_completion_stream(self, *, messages, agent_type, tools, parallel_tool_calls, max_tokens=None, retry_enabled=True):
+            self.calls.append({"messages": messages, "tools": tools, "max_tokens": max_tokens, "streaming": True, "retry_enabled": retry_enabled})
             yield {"type": "token", "content": "Need ", "accumulated": "Need "}
             yield {"type": "tool_call", "tool_call": {"id": "tool-1", "name": "Read", "input": {"file_path": "README.md"}}}
             yield {"type": "done", "content": "Need tool", "finish_reason": "stop"}
@@ -1019,6 +1058,7 @@ def test_runtime_model_client_stream_complete_emits_tool_call_events_before_done
     assert [event["type"] for event in events] == ["content_delta", "tool_call", "done"]
     assert events[1]["tool_call"]["name"] == "Read"
     assert events[2]["content"] == "Need tool"
+    assert llm.calls[0]["retry_enabled"] is False
 
 
 def test_runtime_model_client_stream_complete_does_not_reemit_done_tool_calls():

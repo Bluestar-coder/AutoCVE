@@ -36,6 +36,7 @@ from app.services.runtime_core.shell_runtime_tools import (
 )
 from app.services.runtime_core.tool_runtime import (
     RUNTIME_SEARCH_TOOL_TIMEOUT_SECONDS,
+    RUNTIME_SEARCH_TOOL_MAX_TIMEOUT_SECONDS,
     RuntimeTool,
     ToolExecutionContext,
     ToolRegistry,
@@ -64,6 +65,7 @@ class GlobToolInput(BaseModel):
     pattern: str | None = Field(default=None, description="Optional glob pattern, for example **/*.java or *.xml.")
     recursive: bool = Field(default=True, description="Whether to walk child directories.")
     max_results: int = Field(default=GLOB_DEFAULT_MAX_RESULTS, description="Maximum files to return.")
+    timeout_seconds: int = Field(default=RUNTIME_SEARCH_TOOL_TIMEOUT_SECONDS, ge=1, le=RUNTIME_SEARCH_TOOL_MAX_TIMEOUT_SECONDS)
 
 
 class GrepToolInput(BaseModel):
@@ -73,6 +75,7 @@ class GrepToolInput(BaseModel):
     case_sensitive: bool = Field(default=False, description="Whether the search is case sensitive.")
     max_results: int = Field(default=GREP_DEFAULT_MAX_RESULTS, description="Maximum number of matches to return.")
     is_regex: bool = Field(default=False, description="Whether pattern should be treated as regex.")
+    timeout_seconds: int = Field(default=RUNTIME_SEARCH_TOOL_TIMEOUT_SECONDS, ge=1, le=RUNTIME_SEARCH_TOOL_MAX_TIMEOUT_SECONDS)
 
 
 class WriteToolInput(BaseModel):
@@ -241,6 +244,7 @@ class CanonicalGlobTool(RuntimeTool):
             "pattern": payload.get("pattern") or payload.get("glob"),
             "recursive": payload.get("recursive", True),
             "max_results": requested_max_results,
+            "timeout_seconds": payload.get("timeout_seconds") or RUNTIME_SEARCH_TOOL_TIMEOUT_SECONDS,
         }
         return GlobToolInput.model_validate(normalized)
 
@@ -248,8 +252,8 @@ class CanonicalGlobTool(RuntimeTool):
         return True
 
     def execution_timeout_seconds(self, parsed_input: Any = None, context: ToolExecutionContext | None = None) -> float | None:
-        del parsed_input, context
-        return RUNTIME_SEARCH_TOOL_TIMEOUT_SECONDS
+        del context
+        return min(RUNTIME_SEARCH_TOOL_MAX_TIMEOUT_SECONDS, max(1, int(parsed_input.timeout_seconds))) + 2
 
     async def execute(self, parsed_input: GlobToolInput, context: ToolExecutionContext) -> ToolExecutionPayload:
         del context
@@ -260,6 +264,7 @@ class CanonicalGlobTool(RuntimeTool):
             pattern=parsed_input.pattern,
             recursive=parsed_input.recursive,
             max_files=applied_max_results,
+            timeout_seconds=parsed_input.timeout_seconds,
         )
         payload = _result_to_payload(result)
         return _append_truncation_hint(payload, requested=requested_max_results, limit=applied_max_results)
@@ -303,6 +308,7 @@ class CanonicalGrepTool(RuntimeTool):
             "case_sensitive": payload.get("case_sensitive", False),
             "max_results": requested_max_results,
             "is_regex": payload.get("is_regex", False),
+            "timeout_seconds": payload.get("timeout_seconds") or RUNTIME_SEARCH_TOOL_TIMEOUT_SECONDS,
         }
         return GrepToolInput.model_validate(normalized)
 
@@ -310,8 +316,8 @@ class CanonicalGrepTool(RuntimeTool):
         return True
 
     def execution_timeout_seconds(self, parsed_input: Any = None, context: ToolExecutionContext | None = None) -> float | None:
-        del parsed_input, context
-        return RUNTIME_SEARCH_TOOL_TIMEOUT_SECONDS
+        del context
+        return min(RUNTIME_SEARCH_TOOL_MAX_TIMEOUT_SECONDS, max(1, int(parsed_input.timeout_seconds))) + 2
 
     async def execute(self, parsed_input: GrepToolInput, context: ToolExecutionContext) -> ToolExecutionPayload:
         del context
@@ -324,6 +330,7 @@ class CanonicalGrepTool(RuntimeTool):
             case_sensitive=parsed_input.case_sensitive,
             max_results=applied_max_results,
             is_regex=parsed_input.is_regex,
+            timeout_seconds=parsed_input.timeout_seconds,
         )
         payload = _result_to_payload(result)
         return _append_truncation_hint(payload, requested=requested_max_results, limit=applied_max_results)

@@ -83,6 +83,7 @@ const DEFAULT_AGENT_CONFIG: AgentModelConfig = {
   llmBaseUrl: '',
   llmTimeout: null,
   llmTemperature: null,
+  llmTopP: null,
   llmMaxTokens: null,
   endpointProtocol: DEFAULT_ENDPOINT_PROTOCOL,
   toolMessageFormat: 'auto',
@@ -222,6 +223,7 @@ function cloneModelProfile(input?: Partial<ModelProfileConfig>): ModelProfileCon
     llmBaseUrl: input?.llmBaseUrl || '',
     llmTimeout: input?.llmTimeout ?? null,
     llmTemperature: input?.llmTemperature ?? null,
+    llmTopP: input?.llmTopP ?? null,
     llmMaxTokens: input?.llmMaxTokens ?? null,
     endpointProtocol: normalizeEndpointProtocol(input?.endpointProtocol),
     toolMessageFormat: normalizeToolMessageFormat(input?.toolMessageFormat),
@@ -246,6 +248,7 @@ function buildProfileFromGlobal(
     llmBaseUrl: config.llmBaseUrl,
     llmTimeout: config.llmTimeout,
     llmTemperature: config.llmTemperature,
+    llmTopP: config.llmTopP,
     llmMaxTokens: config.llmMaxTokens,
     endpointProtocol: config.endpointProtocol,
     toolMessageFormat: config.toolMessageFormat,
@@ -325,7 +328,8 @@ export function SystemConfig() {
     llmModel: '',
     llmBaseUrl: '',
     llmTimeout: 150000,
-    llmTemperature: 0.1,
+    llmTemperature: null,
+    llmTopP: null,
     llmMaxTokens: 4096,
     endpointProtocol: DEFAULT_ENDPOINT_PROTOCOL,
     toolMessageFormat: 'auto',
@@ -398,7 +402,8 @@ export function SystemConfig() {
         llmModel: llmConfig.llmModel || '',
         llmBaseUrl: llmConfig.llmBaseUrl || '',
         llmTimeout: llmConfig.llmTimeout ?? 150000,
-        llmTemperature: llmConfig.llmTemperature ?? 0.1,
+        llmTemperature: llmConfig.llmTemperature ?? null,
+        llmTopP: llmConfig.llmTopP ?? null,
         llmMaxTokens: llmConfig.llmMaxTokens ?? 4096,
         endpointProtocol: normalizeEndpointProtocol(llmConfig.endpointProtocol),
         toolMessageFormat: normalizeToolMessageFormat(llmConfig.toolMessageFormat),
@@ -477,6 +482,7 @@ export function SystemConfig() {
       llmBaseUrl: profile.llmBaseUrl || '',
       llmTimeout: profile.llmTimeout ?? null,
       llmTemperature: profile.llmTemperature ?? null,
+      llmTopP: profile.llmTopP ?? null,
       llmMaxTokens: profile.llmMaxTokens ?? null,
       endpointProtocol: normalizeEndpointProtocol(profile.endpointProtocol),
       toolMessageFormat: normalizeToolMessageFormat(profile.toolMessageFormat),
@@ -552,6 +558,8 @@ export function SystemConfig() {
         apiKey: globalConfig.llmApiKey,
         model: globalConfig.llmModel,
         baseUrl: globalConfig.llmBaseUrl,
+        temperature: globalConfig.llmTemperature,
+        topP: globalConfig.llmTopP,
         endpointProtocol: globalConfig.endpointProtocol,
         toolMessageFormat: globalConfig.toolMessageFormat,
         prompt: DEFAULT_TEST_PROMPT,
@@ -889,7 +897,24 @@ export function SystemConfig() {
                   llmTemperature: event.target.value === '' ? null : Number(event.target.value),
                 })
               }
-              placeholder="0.1"
+              placeholder="自动（留空）"
+            />
+          </div>
+          <div className={cn(SOFT_PANEL_CLASS, 'p-4')}>
+            <Label className="text-sm font-bold text-slate-800">Top P</Label>
+            <Input
+              type="number"
+              min={0}
+              max={1}
+              step="0.01"
+              className={cn(INPUT_CLASS, 'mt-2')}
+              value={(isGlobalScope ? globalConfig.llmTopP : activeAgentConfig?.llmTopP) ?? ''}
+              onChange={(event) =>
+                updateActiveConfig({
+                  llmTopP: event.target.value === '' ? null : Number(event.target.value),
+                })
+              }
+              placeholder="自动（留空）"
             />
           </div>
           <div className={cn(SOFT_PANEL_CLASS, 'p-4')}>
@@ -1105,6 +1130,7 @@ export function SystemConfig() {
                 ['Tool Message Format', activeManagedProfile.toolMessageFormat || '-'],
                 ['Timeout', activeManagedProfile.llmTimeout ?? '-'],
                 ['Temperature', activeManagedProfile.llmTemperature ?? '-'],
+                ['Top P', activeManagedProfile.llmTopP ?? '-'],
                 ['Max Tokens', activeManagedProfile.llmMaxTokens ?? '-'],
               ].map(([label, value]) => (
                 <div key={label} className="rounded-2xl border border-slate-200 bg-slate-50/70 p-4">
@@ -1208,6 +1234,42 @@ export function SystemConfig() {
                     value={editProfileDraft.llmBaseUrl || ''}
                     onChange={(event) => updateEditProfileDraft({ llmBaseUrl: event.target.value })}
                     placeholder="https://api.example.com"
+                  />
+                </div>
+
+                <div className={cn(SOFT_PANEL_CLASS, 'p-4')}>
+                  <Label className="text-sm font-bold text-slate-800">Temperature</Label>
+                  <Input
+                    type="number"
+                    min={0}
+                    max={2}
+                    step="0.1"
+                    className={cn(INPUT_CLASS, 'mt-2')}
+                    value={editProfileDraft.llmTemperature ?? ''}
+                    onChange={(event) =>
+                      updateEditProfileDraft({
+                        llmTemperature: event.target.value === '' ? null : Number(event.target.value),
+                      })
+                    }
+                    placeholder="自动（留空）"
+                  />
+                </div>
+
+                <div className={cn(SOFT_PANEL_CLASS, 'p-4')}>
+                  <Label className="text-sm font-bold text-slate-800">Top P</Label>
+                  <Input
+                    type="number"
+                    min={0}
+                    max={1}
+                    step="0.01"
+                    className={cn(INPUT_CLASS, 'mt-2')}
+                    value={editProfileDraft.llmTopP ?? ''}
+                    onChange={(event) =>
+                      updateEditProfileDraft({
+                        llmTopP: event.target.value === '' ? null : Number(event.target.value),
+                      })
+                    }
+                    placeholder="自动（留空）"
                   />
                 </div>
 
